@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import auth
-from app.database import lifespan
+from app.core.database import lifespan
 
 app = FastAPI(
     title="QueenChat API",
