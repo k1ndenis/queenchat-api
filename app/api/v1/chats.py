@@ -1,6 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+import asyncio
 
 from app.core.websocket import manager, get_current_user_ws
 from app.core.dependency import get_db, get_current_user
@@ -48,6 +49,10 @@ async def websocket_endpoint(
         while True:
             data = await websocket.receive_json()
             
+            if data.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+            
             message_service = MessageService(db)
             message = await message_service.create_message(
                 chat_id=chat_id,
@@ -63,7 +68,8 @@ async def websocket_endpoint(
                         "sender_id": message.sender_id,
                         "sender_name": user.username,
                         "content": message.content,
-                        "created_at": message.created_at
+                        "created_at": message.created_at,
+                        "chat_id": chat_id
                     }
                 },
                 chat_id=chat_id,
@@ -143,7 +149,7 @@ def get_user_chats(
     return chats
 
 @router.post("/{chat_id}/messages", response_model=MessageResponse)
-def send_message(
+async def send_message(
     chat_id: str,
     message_data: MessageCreate,
     current_user: User = Depends(get_current_user),
@@ -162,6 +168,23 @@ def send_message(
         sender_id=current_user.id,
         content=message_data.content
     )
+    
+    await manager.broadcast_to_chat(
+        {
+            "type": "new_message",
+            "message": {
+                "id": message.id,
+                "sender_id": message.sender_id,
+                "sender_name": current_user.username,
+                "content": message.content,
+                "created_at": message.created_at,
+                "chat_id": chat_id
+            }
+        },
+        chat_id=chat_id,
+        exclude_user_id=current_user.id
+    )
+    
     return message
 
 @router.get("/{chat_id}/messages", response_model=List[MessageResponse])
