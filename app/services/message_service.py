@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from app.repositories.message_repository import MessageRepository
 from app.core.redis import redis_cache
 
+
 class MessageService:
     def __init__(self, db: Session):
         self.repo = MessageRepository(db)
@@ -32,4 +33,4 @@ class MessageService:
         ]
         
         redis_cache.set(cache_key, messages_dict)
-        return messages
+        return messages_dict

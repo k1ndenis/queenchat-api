@@ -15,8 +15,8 @@ class RedisCacheBackend:
         self.ttl_seconds = ttl_seconds
 
     def set(self, key: str, value: dict):
-        self.redis_client.setex(key, self.ttl_seconds, json.dumps(value))
-
+        self.redis_client.set(key, json.dumps(value), ex=self.ttl_seconds)
+        
     def get(self, key: str) -> dict | None:
         value = self.redis_client.get(key)
         if value:

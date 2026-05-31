@@ -1,7 +1,7 @@
 import os
 import jwt
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "secret-key-change-me")
 ALGORITHM = "HS256"
@@ -18,6 +18,6 @@ def create_token(user_id: str, username: str) -> str:
     payload = {
         "user_id": user_id,
         "username": username,
-        "exp": datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+        "exp": datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)

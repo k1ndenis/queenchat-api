@@ -54,7 +54,7 @@ async def websocket_endpoint(
                 continue
             
             message_service = MessageService(db)
-            message = await message_service.create_message(
+            message = message_service.create_message(
                 chat_id=chat_id,
                 sender_id=user.id,
                 content=data.get("content")

@@ -37,7 +37,7 @@ class ChatService:
                 participants=participants
             ))
         
-        redis_cache.set(cache_key, [chat.dict() for chat in result])
+        redis_cache.set(cache_key, [chat.model_dump() for chat in result])
         return result
 
     def get_chat(self, chat_id: str) -> ChatResponse | None:
@@ -68,7 +68,7 @@ class ChatService:
             participants=participants
         )
         
-        redis_cache.set(cache_key, result.dict())
+        redis_cache.set(cache_key, result.model_dump())
         return result
 
     def create_chat(self, name: str, is_group: bool, created_by: str, participant_ids: list[str]):

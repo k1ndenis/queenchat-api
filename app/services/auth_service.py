@@ -28,7 +28,7 @@ class AuthService:
         ]
         
         # Сохраняем в кэш
-        redis_cache.set("all_users", [user.dict() for user in result])
+        redis_cache.set("all_users", [user.model_dump() for user in result])
         
         return result
 
