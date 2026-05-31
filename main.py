@@ -24,3 +24,11 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(chats.router, prefix="/api/chats", tags=["chats"])
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to the QueenChat API"}

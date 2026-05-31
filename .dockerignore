@@ -1,0 +1,26 @@
+# Python кэш
+__pycache__/
+*.pyc
+
+# Виртуальное окружение
+.venv/
+venv/
+.env
+
+# Git
+.git/
+
+# IDE
+.vscode/
+.idea/
+
+# Логи
+*.log
+
+# Docker файлы
+Dockerfile
+docker-compose*.yml
+
+# Тесты
+.pytest_cache/
+tests/
