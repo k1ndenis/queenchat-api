@@ -87,6 +87,9 @@ class ChatService:
             participants=participants
         )
 
+    def delete_chat(self, chat_id: str):
+        return self.repo.delete_chat(chat_id)
+
     def add_participant(self, chat_id: str, user_id: str):
         return self.repo.add_participant(chat_id, user_id)
 

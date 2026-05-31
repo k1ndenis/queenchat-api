@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import uuid
 import time
-from app.core.database import ChatORM, ChatParticipantORM
+from app.core.database import ChatORM, ChatParticipantORM, MessageORM
 
 class ChatRepository:
     def __init__(self, db: Session):
@@ -36,6 +36,27 @@ class ChatRepository:
         self.db.commit()
         self.db.refresh(chat)
         return chat
+
+    def delete_chat(self, chat_id: str) -> bool:
+        try:
+            self.db.query(ChatParticipantORM).filter(
+                ChatParticipantORM.chat_id == chat_id
+            ).delete()
+            
+            self.db.query(MessageORM).filter(
+                MessageORM.chat_id == chat_id
+            ).delete()
+            
+            chat = self.db.query(ChatORM).filter(ChatORM.id == chat_id).first()
+            if chat:
+                self.db.delete(chat)
+                self.db.commit()
+                return True
+            return False
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error deleting chat: {e}")
+            return False
 
     def add_participant(self, chat_id: str, user_id: str):
         participant = ChatParticipantORM(

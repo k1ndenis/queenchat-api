@@ -19,3 +19,7 @@ class ChatResponse(BaseModel):
     created_at: int
     updated_at: int
     participants: List[ParticipantResponse] = []
+
+class ChatDeleteResponse(BaseModel):
+    id: str
+    message: str = "Chat deleted successfully"
