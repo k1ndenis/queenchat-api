@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import auth
 from app.api.v1 import chats
 from app.core.database import lifespan
+from app.core.redis import redis_client
 
 app = FastAPI(
     title="QueenChat API",

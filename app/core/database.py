@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
+from app.core.redis import redis_client
+
 load_dotenv()
 
 DB_HOST = os.getenv("DB_HOST")
@@ -77,4 +79,13 @@ class MessageORM(Base):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    try:
+        redis_client.ping()
+        print("✅ Redis connected")
+    except Exception as e:
+        print(f"❌ Redis connection failed: {e}")
+    
     yield
+    
+    redis_client.close()
+    print("Redis connection closed")
