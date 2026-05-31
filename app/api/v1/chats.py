@@ -9,7 +9,7 @@ from app.services.chat_service import ChatService
 from app.services.message_service import MessageService
 from app.models.chat import ChatCreate, ChatResponse
 from app.models.message import MessageCreate, MessageResponse
-
+from app.repositories.auth_repository import AuthRepository
 
 router = APIRouter()
 
@@ -76,7 +76,6 @@ async def websocket_endpoint(
             chat_id=chat_id
         )
 
-
 @router.get("/{chat_id}", response_model=ChatResponse)
 def get_chat(
     chat_id: str,
@@ -98,18 +97,41 @@ def get_chat(
 
 @router.post("/", response_model=ChatResponse, status_code=status.HTTP_201_CREATED)
 def create_chat(
-    chat_data: ChatCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-) -> ChatResponse:
-    service = ChatService(db)
-    chat = service.create_chat(
-        name=chat_data.name,
-        is_group=chat_data.is_group,
-        created_by=current_user.id,
-        participant_ids=chat_data.participant_ids
-    )
-    return chat
+        chat_data: ChatCreate,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
+    ) -> ChatResponse:
+        service = ChatService(db)
+        
+        if chat_data.is_group:
+            chat = service.create_chat(
+                name=chat_data.name,
+                is_group=True,
+                created_by=current_user.id,
+                participant_ids=chat_data.participant_ids
+            )
+        else:
+            other_username = chat_data.participant_ids[0] if chat_data.participant_ids else None
+            if not other_username:
+                raise HTTPException(status_code=400, detail="Username required")
+            
+            auth_repo = AuthRepository(db)
+            other_user = auth_repo.get_by_username(other_username)
+            if not other_user:
+                raise HTTPException(status_code=404, detail=f"User '{other_username}' not found")
+            
+            existing = service.repo.get_existing_private_chat(current_user.id, other_user.id)
+            if existing:
+                return service.get_chat(existing.id)
+            
+            chat = service.create_chat(
+                name=None,
+                is_group=False,
+                created_by=current_user.id,
+                participant_ids=[other_user.id]
+            )
+        
+        return chat
 
 @router.get("/", response_model=List[ChatResponse])
 def get_user_chats(

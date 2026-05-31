@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 import uuid
 import time
 from app.core.database import ChatORM, ChatParticipantORM
@@ -6,6 +7,21 @@ from app.core.database import ChatORM, ChatParticipantORM
 class ChatRepository:
     def __init__(self, db: Session):
         self.db = db
+
+    def get_existing_private_chat(self, user1_id: str, user2_id: str) -> ChatORM | None:
+        chat_ids = self.db.query(ChatParticipantORM.chat_id).filter(
+            ChatParticipantORM.user_id.in_([user1_id, user2_id])
+        ).group_by(ChatParticipantORM.chat_id).having(
+            func.count(ChatParticipantORM.user_id) == 2
+        ).all()
+        
+        if not chat_ids:
+            return None
+        
+        return self.db.query(ChatORM).filter(
+            ChatORM.id.in_([c[0] for c in chat_ids]),
+            ChatORM.is_group == False
+        ).first()
 
     def create_chat(self, name: str, is_group: bool, created_by: str) -> ChatORM:
         chat = ChatORM(

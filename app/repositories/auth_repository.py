@@ -13,6 +13,9 @@ class AuthRepository:
     def get_by_id(self, user_id: str) -> UserORM:
         return self.db.query(UserORM).filter(UserORM.id == user_id).first()
 
+    def get_by_username(self, username: str) -> UserORM | None:
+        return self.db.query(UserORM).filter(UserORM.username == username).first()
+
     def get_by_email(self, email: str) -> UserORM | None:
         return self.db.query(UserORM).filter(UserORM.email == email).first()
 
