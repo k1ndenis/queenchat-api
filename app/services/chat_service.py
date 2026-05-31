@@ -63,21 +63,19 @@ class ChatService:
             ))
         return result
 
-    def get_chat(self, chat_id: str):
+    def get_chat(self, chat_id: str) -> ChatResponse | None:
         chat = self.repo.get_chat(chat_id)
         if not chat:
             return None
         
         participants = []
-        if hasattr(chat, 'chat_participants'):
-            for cp in chat.chat_participants:
-                participants.append({
-                    "user_id": cp.user_id,
-                    "username": cp.user.username,
-                    "joined_at": cp.joined_at
-                })
-        else:
-            participants = []
+        # chat.participants — это список UserORM
+        for user in chat.participants:
+            participants.append({
+                "user_id": user.id,
+                "username": user.username,
+                "joined_at": chat.created_at  # временно
+            })
         
         return ChatResponse(
             id=chat.id,

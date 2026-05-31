@@ -35,14 +35,14 @@ class AuthService:
         
         token = create_token(user.id, user.username)
         
-        return TokenResponse(
-            token=token,
-            user={
+        return {
+            "token": token,
+            "user": {
                 "id": user.id,
                 "username": user.username,
                 "email": user.email
             }
-        )
+        }
 
     def login(self, payload: LoginRequest) -> TokenResponse:
         user = self.repository.get_by_email(payload.email)
@@ -54,14 +54,14 @@ class AuthService:
         
         token = create_token(user.id, user.username)
         
-        return TokenResponse(
-            token=token,
-            user={
+        return {
+            "token": token,
+            "user": {
                 "id": user.id,
                 "username": user.username,
                 "email": user.email
             }
-        )
+        }
     
     def delete_user(self, user_id: str) -> bool:
         return self.repository.delete_user(user_id)

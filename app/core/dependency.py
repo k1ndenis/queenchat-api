@@ -1,5 +1,4 @@
-from fastapi import Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import Generator
 import jwt
@@ -11,8 +10,6 @@ from app.services.auth_service import AuthService
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = "HS256"
 
-security = HTTPBearer()
-
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
@@ -21,15 +18,17 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
-    return AuthService(
-        db=db
-    )
+    return AuthService(db=db)
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request,
     db: Session = Depends(get_db)
 ) -> UserORM:
-    token = credentials.credentials
+    token = request.cookies.get("access_token")
+    
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("user_id")
