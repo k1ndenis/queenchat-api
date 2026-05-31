@@ -9,6 +9,9 @@ from app.core.database import UserORM
 class AuthRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
+    
+    def get_by_id(self, user_id: str) -> UserORM:
+        return self.db.query(UserORM).filter(UserORM.id == user_id).first()
 
     def get_by_email(self, email: str) -> UserORM | None:
         return self.db.query(UserORM).filter(UserORM.email == email).first()
