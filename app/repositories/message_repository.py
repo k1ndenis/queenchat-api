@@ -28,7 +28,6 @@ class MessageRepository:
         return message
 
     def get_chat_messages(self, chat_id: str, limit: int = None, offset: int = 0) -> list[MessageORM]:
-        """Получить сообщения чата. Если limit=None - возвращаем все"""
         query = self.db.query(MessageORM).filter(
             MessageORM.chat_id == chat_id
         ).order_by(MessageORM.created_at.asc())
@@ -40,7 +39,7 @@ class MessageRepository:
         print(f"📚 Loaded {len(messages)} messages from chat {chat_id} (limit={limit})")
         return messages
 
-    def mark_as_read(self, message_id: str, user_id: str) -> bool:
+    def mark_as_read(self, message_id: str, user_id: str) -> MessageORM | None:
         message = self.db.query(MessageORM).filter(
             MessageORM.id == message_id,
             MessageORM.sender_id != user_id
@@ -49,6 +48,7 @@ class MessageRepository:
         if message and not message.is_read:
             message.is_read = True
             self.db.flush()
-            print(f"✓ Message {message_id} marked as read")
-            return True
-        return False
+            print(f"✓ Message {message_id} marked as read by {user_id}")
+            return message
+        
+        return None

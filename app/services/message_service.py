@@ -14,8 +14,7 @@ class MessageService:
         return message
     
     def get_chat_messages(self, chat_id: str, limit: int = None, offset: int = 0) -> list[MessageORM]:
-        """Получить сообщения чата. Если limit=None - все сообщения"""
         return self.repo.get_chat_messages(chat_id, limit, offset)
 
-    def mark_as_read(self, message_id: str, user_id: str) -> bool:
+    def mark_as_read(self, message_id: str, user_id: str) -> MessageORM | None:
         return self.repo.mark_as_read(message_id, user_id)
