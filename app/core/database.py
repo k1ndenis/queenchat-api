@@ -69,7 +69,9 @@ class MessageORM(Base):
     
     chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id"))
     sender_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
-    content: Mapped[str] = mapped_column(String, nullable=False)
+    content: Mapped[str] = mapped_column(String, nullable=True)
+    sticker_id: Mapped[str] = mapped_column(default=False)
+    is_sticker: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[int] = mapped_column(default=lambda: int(time.time()))
     is_read: Mapped[bool] = mapped_column(default=False)
     

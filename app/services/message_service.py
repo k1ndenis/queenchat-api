@@ -7,8 +7,9 @@ class MessageService:
     def __init__(self, db: Session):
         self.repo = MessageRepository(db)
     
-    def create_message(self, chat_id: str, sender_id: str, content: str):
-        message = self.repo.create_message(chat_id, sender_id, content)
+    def create_message(self, chat_id: str, sender_id: str, content: str = None, sticker_id: str = None):
+        is_sticker = sticker_id is not None
+        message = self.repo.create_message(chat_id, sender_id, content, sticker_id, is_sticker)
         redis_cache.delete(f"chat_messages:{chat_id}")
         return message
     

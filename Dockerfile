@@ -18,6 +18,6 @@ ENV PATH="/app/deps/bin:${PATH}"
 
 COPY . .
 
-EXPOSE 3001
+EXPOSE 3002
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3002"]
