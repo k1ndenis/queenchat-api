@@ -13,25 +13,9 @@ class MessageService:
         redis_cache.delete(f"chat_messages:{chat_id}")
         return message
     
-    def get_chat_messages(self, chat_id: str, limit: int = 50, offset: int = 0):
-        cache_key = f"chat_messages:{chat_id}:{limit}:{offset}"
-        cached = redis_cache.get(cache_key)
-        if cached:
-            return cached
-        
-        messages = self.repo.get_chat_messages(chat_id, limit, offset)
-        
-        messages_dict = [
-            {
-                "id": msg.id,
-                "chat_id": msg.chat_id,
-                "sender_id": msg.sender_id,
-                "content": msg.content,
-                "created_at": msg.created_at,
-                "is_read": msg.is_read
-            }
-            for msg in messages
-        ]
-        
-        redis_cache.set(cache_key, messages_dict)
-        return messages_dict
+    def get_chat_messages(self, chat_id: str, limit: int = None, offset: int = 0) -> list[MessageORM]:
+        """Получить сообщения чата. Если limit=None - все сообщения"""
+        return self.repo.get_chat_messages(chat_id, limit, offset)
+
+    def mark_as_read(self, message_id: str, user_id: str) -> bool:
+        return self.repo.mark_as_read(message_id, user_id)

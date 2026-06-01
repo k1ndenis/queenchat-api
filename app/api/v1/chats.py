@@ -6,6 +6,7 @@ import asyncio
 from app.core.websocket import manager, get_current_user_ws
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
+from app.core.database import MessageORM
 from app.services.chat_service import ChatService
 from app.services.message_service import MessageService
 from app.models.chat import ChatCreate, ChatResponse, ChatDeleteResponse
@@ -20,6 +21,23 @@ def validate_chat_id(chat_id: str):
         raise HTTPException(status_code=400, detail="Invalid chat ID")
     return chat_id
 
+@router.websocket("/ws/global")
+async def global_websocket_endpoint(
+    websocket: WebSocket,
+    token: str = Query(...),
+    db: Session = Depends(get_db)
+):
+    user = await get_current_user_ws(websocket, token, db)
+    if not user:
+        return
+    
+    await manager.connect_global(user.id, websocket)
+    
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect_global(user.id)
 
 @router.websocket("/ws/{chat_id}")
 async def websocket_endpoint(
@@ -39,9 +57,17 @@ async def websocket_endpoint(
         return
     
     chat_service = ChatService(db)
+    
+    # Автоматически добавляем пользователя в участники для WebSocket
     if not chat_service.is_participant(chat_id, user.id):
-        await websocket.close(code=4005, reason="Not a participant")
-        return
+        try:
+            chat_service.add_participant(chat_id, user.id)
+            db.commit()
+            print(f"✅ WebSocket: Auto-added user {user.id} to chat {chat_id}")
+        except Exception as e:
+            print(f"❌ WebSocket: Failed to add participant: {e}")
+            await websocket.close(code=4005, reason="Not a participant")
+            return
     
     await manager.connect(chat_id, user.id, websocket)
     
@@ -53,27 +79,15 @@ async def websocket_endpoint(
                 await websocket.send_json({"type": "pong"})
                 continue
             
-            message_service = MessageService(db)
-            message = message_service.create_message(
-                chat_id=chat_id,
-                sender_id=user.id,
-                content=data.get("content")
-            )
-            
+            # Просто ретранслируем сообщение всем в чате
+            # Сообщение уже сохранено в БД через HTTP POST
             await manager.broadcast_to_chat(
                 {
                     "type": "new_message",
-                    "message": {
-                        "id": message.id,
-                        "sender_id": message.sender_id,
-                        "sender_name": user.username,
-                        "content": message.content,
-                        "created_at": message.created_at,
-                        "chat_id": chat_id
-                    }
+                    "message": data.get("message", data)  # Проксируем полученное сообщение
                 },
                 chat_id=chat_id,
-                exclude_user_id=user.id
+                exclude_user_id=user.id  # Не отправляем обратно отправителю
             )
     except WebSocketDisconnect:
         manager.disconnect(chat_id, user.id)
@@ -96,8 +110,15 @@ def get_chat(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
+    # Автоматически добавляем пользователя в участники если нужно
     if not service.is_participant(chat_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Not a participant")
+        try:
+            service.add_participant(chat_id, current_user.id)
+            db.commit()  # ✅ Добавлен commit
+            print(f"✅ GET chat: Auto-added user {current_user.id} to chat {chat_id}")
+        except Exception as e:
+            print(f"❌ GET chat: Failed to add participant: {e}")
+            db.rollback()
     
     return chat
 
@@ -130,35 +151,44 @@ def create_chat(
 ) -> ChatResponse:
     service = ChatService(db)
     
-    if chat_data.is_group:
-        chat = service.create_chat(
-            name=chat_data.name,
-            is_group=True,
-            created_by=current_user.id,
-            participant_ids=chat_data.participant_ids
-        )
-    else:
-        other_username = chat_data.participant_ids[0] if chat_data.participant_ids else None
-        if not other_username:
-            raise HTTPException(status_code=400, detail="Username required")
+    try:
+        if chat_data.is_group:
+            # Для групповых чатов добавляем создателя в participants
+            all_participants = list(set(chat_data.participant_ids + [current_user.id]))
+            chat = service.create_chat(
+                name=chat_data.name,
+                is_group=True,
+                created_by=current_user.id,
+                participant_ids=all_participants
+            )
+        else:
+            other_username = chat_data.participant_ids[0] if chat_data.participant_ids else None
+            if not other_username:
+                raise HTTPException(status_code=400, detail="Username required")
+            
+            auth_repo = AuthRepository(db)
+            other_user = auth_repo.get_by_username(other_username)
+            if not other_user:
+                raise HTTPException(status_code=404, detail=f"User '{other_username}' not found")
+            
+            existing = service.repo.get_existing_private_chat(current_user.id, other_user.id)
+            if existing:
+                return service.get_chat(existing.id)
+            
+            chat = service.create_chat(
+                name=None,
+                is_group=False,
+                created_by=current_user.id,
+                participant_ids=[current_user.id, other_user.id]  # Оба участника
+            )
         
-        auth_repo = AuthRepository(db)
-        other_user = auth_repo.get_by_username(other_username)
-        if not other_user:
-            raise HTTPException(status_code=404, detail=f"User '{other_username}' not found")
+        db.commit()  # ✅ Commit создания чата
+        return chat
         
-        existing = service.repo.get_existing_private_chat(current_user.id, other_user.id)
-        if existing:
-            return service.get_chat(existing.id)
-        
-        chat = service.create_chat(
-            name=None,
-            is_group=False,
-            created_by=current_user.id,
-            participant_ids=[other_user.id]
-        )
-    
-    return chat
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error creating chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/", response_model=List[ChatResponse])
 def get_user_chats(
@@ -178,54 +208,130 @@ async def send_message(
 ) -> MessageResponse:
     chat_id = validate_chat_id(chat_id)
     
-    service = MessageService(db)
+    print(f"🔵 [MESSAGE] Sending to chat {chat_id} from user {current_user.id}")
     
-    chat_service = ChatService(db)
-    if not chat_service.is_participant(chat_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Not a participant")
-    
-    message = service.create_message(
-        chat_id=chat_id,
-        sender_id=current_user.id,
-        content=message_data.content
-    )
-    
-    await manager.broadcast_to_chat(
-        {
-            "type": "new_message",
-            "message": {
-                "id": message.id,
-                "sender_id": message.sender_id,
-                "sender_name": current_user.username,
-                "content": message.content,
-                "created_at": message.created_at,
-                "chat_id": chat_id
-            }
-        },
-        chat_id=chat_id,
-        exclude_user_id=current_user.id
-    )
-    
-    return message
+    try:
+        message_service = MessageService(db)
+        chat_service = ChatService(db)
+        
+        # Автоматически добавляем пользователя в участники если нужно
+        if not chat_service.is_participant(chat_id, current_user.id):
+            print(f"⚠️ User {current_user.id} not in participants, adding...")
+            chat_service.add_participant(chat_id, current_user.id)
+            db.flush()  # Сначала flush, потом commit
+        
+        # Создаем сообщение (внутри есть flush)
+        message = message_service.create_message(
+            chat_id=chat_id,
+            sender_id=current_user.id,
+            content=message_data.content
+        )
+        
+        # ✅ ВАЖНО: Проверяем, что сообщение в сессии
+        print(f"📝 Before commit - message in session: {message in db}")
+        print(f"   Session dirty: {db.is_modified(message)}")
+        
+        # ✅ КОММИТИМ ВСЕ ИЗМЕНЕНИЯ
+        db.commit()
+        
+        # ✅ После коммита обновляем объект
+        db.refresh(message)
+        
+        print(f"✅ Message {message.id} COMMITTED to DB at {message.created_at}")
+        
+        # Проверяем, что сообщение реально в БД
+        check = db.query(MessageORM).filter(MessageORM.id == message.id).first()
+        print(f"   Verification - message in DB: {check is not None}")
+        
+        # Отправляем через WebSocket
+        await manager.broadcast_to_chat(
+            {
+                "type": "new_message",
+                "message": {
+                    "id": message.id,
+                    "sender_id": message.sender_id,
+                    "sender_name": current_user.username,
+                    "content": message.content,
+                    "created_at": message.created_at,
+                    "chat_id": chat_id,
+                    "is_sticker": getattr(message, 'is_sticker', False),
+                    "is_read": message.is_read
+                }
+            },
+            chat_id=chat_id,
+            exclude_user_id=current_user.id
+        )
+        
+        return message
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error sending message: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{chat_id}/messages", response_model=List[MessageResponse])
 def get_messages(
     chat_id: str,
-    limit: int = 50,
+    limit: int = None,
     offset: int = 0,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> List[MessageResponse]:
     chat_id = validate_chat_id(chat_id)
     
-    service = MessageService(db)
+    print(f"🔵 [GET] Loading messages for chat {chat_id}, user {current_user.id}")
     
-    chat_service = ChatService(db)
-    if not chat_service.is_participant(chat_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Not a participant")
+    try:
+        message_service = MessageService(db)
+        chat_service = ChatService(db)
+        
+        # Проверяем существование чата
+        chat = chat_service.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        # Автоматически добавляем пользователя в участники если нужно
+        if not chat_service.is_participant(chat_id, current_user.id):
+            print(f"⚠️ User not in participants, adding...")
+            chat_service.add_participant(chat_id, current_user.id)
+            db.commit()  # ✅ Коммитим добавление участника
+        
+        # Загружаем сообщения
+        messages = message_service.get_chat_messages(chat_id, limit=limit, offset=offset)
+        
+        print(f"📨 Loaded {len(messages)} messages for user {current_user.id}")
+        
+        return messages
+        
+    except Exception as e:
+        print(f"❌ Error loading messages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/{chat_id}/messages/{message_id}/read")
+def mark_message_as_read(
+    chat_id: str,
+    message_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    chat_id = validate_chat_id(chat_id)
     
-    messages = service.get_chat_messages(chat_id, limit=limit, offset=offset)
-    return messages
+    try:
+        service = MessageService(db)
+        result = service.mark_as_read(message_id, current_user.id)
+        
+        if result:
+            db.commit()  # ✅ Commit изменений
+            return {"status": "ok"}
+        else:
+            return {"status": "message not found or already read"}
+            
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error marking message as read: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{chat_id}/participants/{user_id}")
 def add_participant(
@@ -238,12 +344,39 @@ def add_participant(
     
     service = ChatService(db)
     
-    chat = service.get_chat(chat_id)
-    if not chat or chat.created_by != current_user.id:
-        raise HTTPException(status_code=403, detail="Only chat creator can add participants")
-    
-    service.add_participant(chat_id, user_id)
-    return {"message": "Participant added successfully"}
+    try:
+        chat = service.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        # Для личных чатов разрешаем добавлять участников без проверки
+        if not chat.is_group:
+            # Проверяем, не добавлен ли уже пользователь
+            if service.is_participant(chat_id, user_id):
+                return {"message": "Participant already in chat"}
+            
+            service.add_participant(chat_id, user_id)
+            db.commit()  # ✅ Commit
+            print(f"✅ Added participant {user_id} to private chat {chat_id}")
+            return {"message": "Participant added successfully"}
+        
+        # Для групповых - только создатель
+        if chat.created_by != current_user.id:
+            raise HTTPException(status_code=403, detail="Only chat creator can add participants")
+        
+        # Проверяем, не добавлен ли уже пользователь
+        if service.is_participant(chat_id, user_id):
+            return {"message": "Participant already in chat"}
+        
+        service.add_participant(chat_id, user_id)
+        db.commit()  # ✅ Commit
+        print(f"✅ Added participant {user_id} to group chat {chat_id}")
+        return {"message": "Participant added successfully"}
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error adding participant: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{chat_id}/participants/{user_id}")
 def remove_participant(
@@ -256,9 +389,45 @@ def remove_participant(
     
     service = ChatService(db)
     
-    chat = service.get_chat(chat_id)
-    if not chat or chat.created_by != current_user.id:
-        raise HTTPException(status_code=403, detail="Only chat creator can remove participants")
+    try:
+        chat = service.get_chat(chat_id)
+        if not chat or chat.created_by != current_user.id:
+            raise HTTPException(status_code=403, detail="Only chat creator can remove participants")
+        
+        service.remove_participant(chat_id, user_id)
+        db.commit()  # ✅ Commit
+        return {"message": "Participant removed successfully"}
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error removing participant: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ Диагностический эндпоинт (добавьте для отладки)
+@router.get("/debug/chat/{chat_id}/status")
+def debug_chat_status(
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Диагностический эндпоинт для проверки состояния чата"""
+    chat_service = ChatService(db)
+    message_service = MessageService(db)
     
-    service.remove_participant(chat_id, user_id)
-    return {"message": "Participant removed successfully"}
+    chat = chat_service.get_chat(chat_id)
+    if not chat:
+        return {"error": "Chat not found"}
+    
+    participants = [p.user_id for p in chat.participants]
+    messages_count = len(message_service.get_chat_messages(chat_id, limit=1000, offset=0))
+    
+    return {
+        "chat_id": chat_id,
+        "is_group": chat.is_group,
+        "created_by": chat.created_by,
+        "participants": participants,
+        "current_user_in_participants": current_user.id in participants,
+        "messages_count": messages_count,
+        "current_user": current_user.id
+    }

@@ -33,8 +33,7 @@ class ChatRepository:
             updated_at=int(time.time())
         )
         self.db.add(chat)
-        self.db.commit()
-        self.db.refresh(chat)
+        self.db.flush()
         return chat
 
     def delete_chat(self, chat_id: str) -> bool:
@@ -66,7 +65,7 @@ class ChatRepository:
             joined_at=int(time.time())
         )
         self.db.add(participant)
-        self.db.commit()
+        self.db.flush()
         return participant
 
     def is_participant(self, chat_id: str, user_id: str) -> bool:
