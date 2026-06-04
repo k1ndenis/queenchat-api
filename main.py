@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import auth
 from app.api.v1 import chats
+from app.api.v1 import chat_router as chats
+from app.api.v1 import notifications
 from app.core.database import lifespan
-from app.core.redis import redis_client
 
 app = FastAPI(
     title="QueenChat API",
@@ -16,7 +17,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3100"],
+    allow_origins=["https://queenchat.ru"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,6 +25,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(chats.router, prefix="/api/chats", tags=["chats"])
+app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"])
 
 @app.get("/health")
 def health_check():

@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from app.repositories.message_repository import MessageRepository
 from app.core.redis import redis_cache
-
+from app.core.database import MessageORM
 
 class MessageService:
     def __init__(self, db: Session):

@@ -1,12 +1,9 @@
-from fastapi import WebSocket, WebSocketDisconnect, Depends
+from fastapi import WebSocket, Depends
 from sqlalchemy.orm import Session
-import json
 import jwt
 import os
 
 from app.core.dependency import get_db
-from app.services.message_service import MessageService
-from app.services.chat_service import ChatService
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = "HS256"
@@ -41,6 +38,35 @@ class ConnectionManager:
                         await websocket.send_json(message)
                     except:
                         pass
+
+    async def send_notification(self, user_id: str, notification: dict):
+        for chat_id, users in self.active_connections.items():
+            if user_id in users:
+                try:
+                    await users[user_id].send_json({
+                        "type": "notification",
+                        "data": notification
+                    })
+                    print(f"🔔 Notification sent to user {user_id} in chat {chat_id}")
+                    return True
+                except Exception as e:
+                    print(f"❌ Failed to send notification to {user_id}: {e}")
+                    return False
+        print(f"⚠️ User {user_id} not connected to any WebSocket")
+        return False
+    
+    async def broadcast_notification_to_chat(self, chat_id: str, notification: dict, exclude_user_id: str = None):
+        if chat_id in self.active_connections:
+            for user_id, websocket in self.active_connections[chat_id].items():
+                if user_id != exclude_user_id:
+                    try:
+                        await websocket.send_json({
+                            "type": "notification",
+                            "data": notification
+                        })
+                        print(f"🔔 Broadcast notification to {user_id} in chat {chat_id}")
+                    except Exception as e:
+                        print(f"❌ Failed to send to {user_id}: {e}")
 
 manager = ConnectionManager()
 

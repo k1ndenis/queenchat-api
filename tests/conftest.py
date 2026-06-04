@@ -1,6 +1,18 @@
 import sys
 import os
 
+os.environ["TESTING"] = "true"
+os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+
+os.environ["DB_HOST"] = "localhost"
+os.environ["DB_PORT"] = "5432"
+os.environ["DB_NAME"] = "test"
+os.environ["DB_USER"] = "test"
+os.environ["DB_PASSWORD"] = "test"
+
+if "DATABASE_URL" in os.environ:
+    os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
@@ -93,3 +105,13 @@ def second_user_client(client):
     second_client.user_id = user_id
     yield second_client
     second_client.cookies.clear()
+
+@pytest.fixture
+def notification_repo(db_session):
+    from app.repositories.notification_repository import NotificationRepository
+    return NotificationRepository(db_session)
+
+@pytest.fixture
+def notification_service(db_session):
+    from app.services.notification_service import NotificationService
+    return NotificationService(db_session)
