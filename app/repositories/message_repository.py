@@ -52,3 +52,8 @@ class MessageRepository:
             return message
         
         return None
+
+    def get_last_message(self, chat_id: str) -> MessageORM | None:
+        return self.db.query(MessageORM).filter(
+            MessageORM.chat_id == chat_id
+        ).order_by(MessageORM.created_at.desc()).first()

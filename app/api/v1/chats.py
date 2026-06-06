@@ -254,8 +254,6 @@ def get_messages(
 ) -> List[MessageResponse]:
     chat_id = validate_chat_id(chat_id)
     
-    print(f"🔵 [GET] Loading messages for chat {chat_id}, user {current_user.id}")
-    
     try:
         message_service = MessageService(db)
         chat_service = ChatService(db)
@@ -265,13 +263,10 @@ def get_messages(
             raise HTTPException(status_code=404, detail="Chat not found")
         
         if not chat_service.is_participant(chat_id, current_user.id):
-            print(f"⚠️ User not in participants, adding...")
             chat_service.add_participant(chat_id, current_user.id)
             db.commit()
         
         messages = message_service.get_chat_messages(chat_id, limit=limit, offset=offset)
-        
-        print(f"📨 Loaded {len(messages)} messages for user {current_user.id}")
         
         return messages
         
@@ -412,3 +407,35 @@ def debug_chat_status(
         "messages_count": messages_count,
         "current_user": current_user.id
     }
+@router.get("/{chat_id}/last-message")
+
+
+def get_last_message(
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    chat_id = validate_chat_id(chat_id)
+    
+    try:
+        message_service = MessageService(db)
+        chat_service = ChatService(db)
+        
+        if not chat_service.is_participant(chat_id, current_user.id):
+            raise HTTPException(status_code=403, detail="Not a participant")
+        
+        last_msg = message_service.get_last_message(chat_id)
+        
+        if last_msg:
+            return {
+                "id": last_msg.id,
+                "content": last_msg.content,
+                "created_at": last_msg.created_at,
+                "sender_id": last_msg.sender_id,
+                "sender_name": last_msg.sender.username if last_msg.sender else None
+            }
+        return None
+        
+    except Exception as e:
+        print(f"❌ Error getting last message: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

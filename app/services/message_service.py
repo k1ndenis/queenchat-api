@@ -18,3 +18,6 @@ class MessageService:
 
     def mark_as_read(self, message_id: str, user_id: str) -> MessageORM | None:
         return self.repo.mark_as_read(message_id, user_id)
+
+    def get_last_message(self, chat_id: str) -> MessageORM | None:
+        return self.repo.get_last_message(chat_id)
