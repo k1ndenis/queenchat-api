@@ -9,7 +9,7 @@ from app.services.message_service import MessageService
 from app.services.notification_service import NotificationService
 from app.models.message import MessageCreate, MessageResponse
 from app.core.websocket import manager
-from .utils import validate_chat_id
+from app.api.v1.chats import validate_chat_id
 
 router = APIRouter()
 
@@ -42,18 +42,31 @@ async def send_message(
         db.commit()
         db.refresh(message)
         
-        print(f"✅ Message {message.id} COMMITTED to DB at {message.created_at}")
+        print(f"✅ Message {message.id} COMMITTED to DB")
         
-        check = db.query(MessageORM).filter(MessageORM.id == message.id).first()
-        print(f"   Verification - message in DB: {check is not None}")
+        # ========== УВЕДОМЛЕНИЯ ==========
+        print("=" * 60)
+        print("🔔 [NOTIFICATION] Starting notification creation")
+        print(f"🔔 [NOTIFICATION] Chat ID: {chat_id}")
+        print(f"🔔 [NOTIFICATION] Current user: {current_user.id}")
+        print(f"🔔 [NOTIFICATION] Current username: {current_user.username}")
         
         try:
             notification_service = NotificationService(db)
+            print("🔔 [NOTIFICATION] NotificationService created")
+            
             chat = chat_service.get_chat(chat_id)
+            print(f"🔔 [NOTIFICATION] Chat found: {chat is not None}")
             
             if chat:
+                print(f"🔔 [NOTIFICATION] Participants count: {len(chat.participants)}")
+                for idx, p in enumerate(chat.participants):
+                    print(f"🔔 [NOTIFICATION] Participant {idx}: user_id={p.user_id}")
+                
                 for participant in chat.participants:
+                    print(f"🔔 [NOTIFICATION] Checking {participant.user_id} vs {current_user.id}")
                     if participant.user_id != current_user.id:
+                        print(f"🔔 [NOTIFICATION] Creating notification for {participant.user_id}")
                         notification_service.create_notification(
                             user_id=participant.user_id,
                             chat_id=chat_id,
@@ -61,9 +74,19 @@ async def send_message(
                             message=f"{current_user.username}: {message.content[:50]}",
                             type="message"
                         )
-                        print(f"📨 Notification sent to {participant.user_id}")
+                        print(f"✅ [NOTIFICATION] Notification created for {participant.user_id}")
+                    else:
+                        print(f"🔔 [NOTIFICATION] Skipping sender {participant.user_id}")
+            else:
+                print(f"❌ [NOTIFICATION] Chat {chat_id} not found!")
+                
         except Exception as notif_error:
-            print(f"⚠️ Notification error (non-critical): {notif_error}")
+            print(f"❌ [NOTIFICATION] Exception: {notif_error}")
+            import traceback
+            traceback.print_exc()
+        
+        print("=" * 60)
+        # ========== КОНЕЦ УВЕДОМЛЕНИЙ ==========
         
         await manager.broadcast_to_chat(
             {
@@ -91,6 +114,7 @@ async def send_message(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/{chat_id}/messages", response_model=List[MessageResponse])
 def get_messages(
@@ -127,6 +151,7 @@ def get_messages(
         print(f"❌ Error loading messages: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.patch("/{chat_id}/messages/{message_id}/read")
 def mark_message_as_read(
     chat_id: str,
@@ -143,35 +168,20 @@ def mark_message_as_read(
         if message:
             db.commit()
             
-            try:
-                import asyncio
-                loop = asyncio.get_running_loop()
-                loop.create_task(
-                    manager.broadcast_to_chat(
-                        {
-                            "type": "message_read",
-                            "message_id": message_id,
-                            "user_id": current_user.id,
-                            "chat_id": chat_id
-                        },
-                        chat_id=chat_id,
-                        exclude_user_id=None
-                    )
+            # Упрощённая отправка WebSocket уведомления
+            import asyncio
+            asyncio.create_task(
+                manager.broadcast_to_chat(
+                    {
+                        "type": "message_read",
+                        "message_id": message_id,
+                        "user_id": current_user.id,
+                        "chat_id": chat_id
+                    },
+                    chat_id=chat_id,
+                    exclude_user_id=None
                 )
-            except RuntimeError:
-                import asyncio
-                asyncio.run(
-                    manager.broadcast_to_chat(
-                        {
-                            "type": "message_read",
-                            "message_id": message_id,
-                            "user_id": current_user.id,
-                            "chat_id": chat_id
-                        },
-                        chat_id=chat_id,
-                        exclude_user_id=None
-                    )
-                )
+            )
             
             return {"status": "ok", "message_id": message_id, "is_read": True}
         else:
