@@ -168,7 +168,6 @@ def mark_message_as_read(
         if message:
             db.commit()
             
-            # Упрощённая отправка WebSocket уведомления
             import asyncio
             asyncio.create_task(
                 manager.broadcast_to_chat(
@@ -191,3 +190,35 @@ def mark_message_as_read(
         db.rollback()
         print(f"❌ Error marking message as read: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{chat_id}/messages/read/all")
+def mark_all_messages_as_read(
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    chat_id = validate_chat_id(chat_id)
+    
+    message_service = MessageService(db)
+    chat_service = ChatService(db)
+    
+    if not chat_service.is_participant(chat_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+    
+    count = message_service.mark_all_as_read(chat_id, current_user.id)
+    db.commit()
+    
+    import asyncio
+    asyncio.create_task(
+        manager.broadcast_to_chat(
+            {
+                "type": "messages_read",
+                "chat_id": chat_id,
+                "user_id": current_user.id
+            },
+            chat_id=chat_id,
+            exclude_user_id=current_user.id
+        )
+    )
+    
+    return {"status": "ok", "marked_count": count}

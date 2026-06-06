@@ -394,3 +394,59 @@ def get_last_message(
     except Exception as e:
         print(f"❌ Error getting last message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{chat_id}/messages/unread/count")
+def get_unread_messages_count(
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    chat_id = validate_chat_id(chat_id)
+    
+    message_service = MessageService(db)
+    chat_service = ChatService(db)
+    
+    if not chat_service.is_participant(chat_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+    
+    count = message_service.get_unread_count(chat_id, current_user.id)
+    
+    return {"count": count}
+
+@router.post("/{chat_id}/messages/read/all")
+async def mark_all_messages_as_read(
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from app.services.message_service import MessageService
+    from app.services.chat_service import ChatService
+    from app.core.websocket import manager
+    import asyncio
+    
+    chat_id = validate_chat_id(chat_id)
+    
+    message_service = MessageService(db)
+    chat_service = ChatService(db)
+    
+    if not chat_service.is_participant(chat_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+    
+    count = message_service.mark_all_as_read(chat_id, current_user.id)
+    db.commit()
+    
+    print(f"📖 Marked {count} messages as read in chat {chat_id}")
+    
+    asyncio.create_task(
+        manager.broadcast_to_chat(
+            {
+                "type": "messages_read",
+                "chat_id": chat_id,
+                "user_id": current_user.id
+            },
+            chat_id=chat_id,
+            exclude_user_id=current_user.id
+        )
+    )
+    
+    return {"status": "ok", "marked_count": count}

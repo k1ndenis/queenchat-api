@@ -21,3 +21,9 @@ class MessageService:
 
     def get_last_message(self, chat_id: str) -> MessageORM | None:
         return self.repo.get_last_message(chat_id)
+    
+    def get_unread_count(self, chat_id: str, user_id: str) -> int:
+        return self.repo.get_unread_count(chat_id, user_id)
+
+    def mark_all_as_read(self, chat_id: str, user_id: str) -> int:
+        return self.repo.mark_all_as_read(chat_id, user_id)

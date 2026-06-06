@@ -57,3 +57,20 @@ class MessageRepository:
         return self.db.query(MessageORM).filter(
             MessageORM.chat_id == chat_id
         ).order_by(MessageORM.created_at.desc()).first()
+    
+    def get_unread_count(self, chat_id: str, user_id: str) -> int:
+        return self.db.query(MessageORM).filter(
+            MessageORM.chat_id == chat_id,
+            MessageORM.sender_id != user_id,
+            MessageORM.is_read == False
+        ).count()
+
+    def mark_all_as_read(self, chat_id: str, user_id: str) -> int:
+        result = self.db.query(MessageORM).filter(
+            MessageORM.chat_id == chat_id,
+            MessageORM.sender_id != user_id,
+            MessageORM.is_read == False
+        ).update({"is_read": True}, synchronize_session=False)
+        self.db.flush()
+        print(f"📖 [REPO] Marked {result} messages as read in chat {chat_id} for user {user_id}")
+        return result

@@ -84,3 +84,21 @@ class NotificationRepository:
                 NotificationORM.id.in_(ids_to_delete)
             ).delete(synchronize_session=False)
             self.db.commit()
+
+    def get_by_user_and_chat(self, user_id: str, chat_id: str, limit: int, offset: int):
+        return self.db.query(NotificationORM).filter(
+            NotificationORM.user_id == user_id,
+            NotificationORM.chat_id == chat_id
+        ).order_by(
+            NotificationORM.created_at.desc()
+        ).offset(offset).limit(limit).all()
+
+    def mark_by_chat_as_read(self, user_id: str, chat_id: str) -> int:
+        result = self.db.query(NotificationORM).filter(
+            NotificationORM.user_id == user_id,
+            NotificationORM.chat_id == chat_id,
+            NotificationORM.is_read == False
+        ).update({"is_read": True}, synchronize_session=False)
+        self.db.flush()
+        print(f"📖 [REPO] Marked {result} notifications as read for chat {chat_id}")
+        return result

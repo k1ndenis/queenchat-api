@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
 from app.services.notification_service import NotificationService
@@ -13,9 +13,13 @@ def get_notifications(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
+    chat_id: Optional[str] = None
 ):
     service = NotificationService(db)
+    if chat_id:
+        notifications = service.repo.get_by_user_and_chat(current_user.id, chat_id, limit, offset)
+        return notifications
     return service.get_user_notifications(current_user.id, limit, offset)
 
 @router.get("/unread/count")
@@ -46,6 +50,17 @@ def mark_all_as_read(
     service = NotificationService(db)
     service.mark_all_as_read(current_user.id)
     return {"status": "ok"}
+
+@router.patch("/read/by-chat/{chat_id}")
+def mark_notifications_by_chat_as_read(
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = NotificationService(db)
+    count = service.repo.mark_by_chat_as_read(current_user.id, chat_id)
+    db.commit()
+    return {"status": "ok", "marked_count": count}
 
 @router.delete("/clean/old")
 def clean_old_notifications(
