@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import Mock, patch
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 from types import SimpleNamespace
 
 from app.repositories.auth_repository import AuthRepository
@@ -29,7 +28,6 @@ class TestAuthRepository:
 
 class TestGetById(TestAuthRepository):
     def test_get_by_id_success(self, auth_repo, mock_db_session, test_user_orm):
-        """Тест: пользователь найден по ID"""
         mock_query = Mock()
         mock_filter = Mock()
         mock_db_session.query.return_value = mock_query
@@ -111,25 +109,27 @@ class TestGetByUsername(TestAuthRepository):
 
 class TestGetAllUsers(TestAuthRepository):
     def test_get_all_users_success(self, auth_repo, mock_db_session, test_user_orm):
-        mock_scalars = Mock()
-        mock_db_session.scalars.return_value = mock_scalars
-        mock_scalars.all.return_value = [test_user_orm]
+        mock_query = Mock()
+        mock_db_session.query.return_value = mock_query
+        mock_query.all.return_value = [test_user_orm]
 
         result = auth_repo.get_all_users()
 
         assert len(result) == 1
         assert result[0] == test_user_orm
-        mock_db_session.scalars.assert_called_once_with(UserORM)
+        mock_db_session.query.assert_called_once_with(UserORM)
+        mock_query.all.assert_called_once()
 
     def test_get_all_users_empty(self, auth_repo, mock_db_session):
-        mock_scalars = Mock()
-        mock_db_session.scalars.return_value = mock_scalars
-        mock_scalars.all.return_value = []
+        mock_query = Mock()
+        mock_db_session.query.return_value = mock_query
+        mock_query.all.return_value = []
 
         result = auth_repo.get_all_users()
 
         assert result == []
-        mock_db_session.scalars.assert_called_once_with(UserORM)
+        mock_db_session.query.assert_called_once_with(UserORM)
+        mock_query.all.assert_called_once()
 
 
 class TestCreateUser(TestAuthRepository):

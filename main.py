@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import auth
 from app.api.v1 import chats
-from app.api.v1 import chat_router as chats
 from app.api.v1 import notifications
 from app.core.database import lifespan
 

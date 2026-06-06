@@ -1,6 +1,3 @@
-import pytest
-from main import app
-
 class TestNotificationsAPI:
     def test_get_notifications_empty(self, auth_client):
         response = auth_client.get("/api/notifications/")

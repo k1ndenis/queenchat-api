@@ -1,12 +1,10 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-import asyncio
 
 from app.core.websocket import manager, get_current_user_ws
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
-from app.core.database import MessageORM
 from app.services.chat_service import ChatService
 from app.services.message_service import MessageService
 from app.models.chat import ChatCreate, ChatResponse, ChatDeleteResponse
@@ -180,6 +178,8 @@ def create_chat(
         db.commit()
         return chat
         
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         print(f"❌ Error creating chat: {e}")
@@ -203,16 +203,13 @@ async def send_message(
 ) -> MessageResponse:
     chat_id = validate_chat_id(chat_id)
     
-    print(f"🔵 [MESSAGE] Sending to chat {chat_id} from user {current_user.id}")
-    
     try:
         message_service = MessageService(db)
         chat_service = ChatService(db)
         
         if not chat_service.is_participant(chat_id, current_user.id):
-            print(f"⚠️ User {current_user.id} not in participants, adding...")
             chat_service.add_participant(chat_id, current_user.id)
-            db.flush()  # Сначала flush, потом commit
+            db.flush()
         
         message = message_service.create_message(
             chat_id=chat_id,
@@ -220,17 +217,8 @@ async def send_message(
             content=message_data.content
         )
         
-        print(f"📝 Before commit - message in session: {message in db}")
-        print(f"   Session dirty: {db.is_modified(message)}")
-        
         db.commit()
-        
         db.refresh(message)
-        
-        print(f"✅ Message {message.id} COMMITTED to DB at {message.created_at}")
-        
-        check = db.query(MessageORM).filter(MessageORM.id == message.id).first()
-        print(f"   Verification - message in DB: {check is not None}")
         
         await manager.broadcast_to_chat(
             {
@@ -254,9 +242,6 @@ async def send_message(
         
     except Exception as e:
         db.rollback()
-        print(f"❌ Error sending message: {e}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{chat_id}/messages", response_model=List[MessageResponse])

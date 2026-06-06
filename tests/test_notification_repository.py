@@ -2,9 +2,6 @@ import pytest
 from unittest.mock import Mock, patch
 from sqlalchemy.orm import Session
 from app.repositories.notification_repository import NotificationRepository
-from app.core.database import NotificationORM
-import uuid
-import time
 
 class TestNotificationRepository:
     @pytest.fixture

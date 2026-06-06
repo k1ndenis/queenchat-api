@@ -1,6 +1,3 @@
-import pytest
-from main import app
-
 class TestNotificationsIntegration:
     
     def test_full_notification_flow(self, auth_client, db_session):

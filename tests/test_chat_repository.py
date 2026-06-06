@@ -1,11 +1,7 @@
 import pytest
-import uuid
-import time
 from unittest.mock import Mock, patch
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from app.repositories.chat_repository import ChatRepository
-from app.core.database import ChatORM, ChatParticipantORM, MessageORM
 from types import SimpleNamespace
 
 class TestChatRepository:
@@ -98,8 +94,7 @@ class TestCreateChat(TestChatRepository):
                 assert result.is_group is True
                 assert result.created_by == "user1"
                 mock_db_session.add.assert_called_once()
-                mock_db_session.commit.assert_called_once()
-                mock_db_session.refresh.assert_called_once()
+                mock_db_session.flush.assert_called_once()
 
 
 class TestDeleteChat(TestChatRepository):
@@ -149,7 +144,7 @@ class TestAddParticipant(TestChatRepository):
                 assert result.chat_id == "chat123"
                 assert result.user_id == "user2"
                 mock_db_session.add.assert_called_once()
-                mock_db_session.commit.assert_called_once()
+                mock_db_session.flush.assert_called_once()
 
 
 class TestIsParticipant(TestChatRepository):
