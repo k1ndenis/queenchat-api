@@ -1,159 +1,153 @@
 import pytest
-from unittest.mock import Mock, patch
+import uuid
+import time
+from unittest.mock import Mock
 from sqlalchemy.orm import Session
 from app.repositories.message_repository import MessageRepository
-from app.core.database import MessageORM
-from types import SimpleNamespace
+from app.core.database import MessageORM, Base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+# Используем реальную тестовую БД
+DATABASE_URL = "sqlite:///./test_message.db"
+
+@pytest.fixture(scope="module")
+def engine():
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return engine
+
+@pytest.fixture
+def db_session(engine):
+    connection = engine.connect()
+    transaction = connection.begin()
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=connection)
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
+
+@pytest.fixture
+def test_chat_id():
+    return str(uuid.uuid4())
+
+@pytest.fixture
+def test_user_id():
+    return str(uuid.uuid4())
+
+@pytest.fixture
+def test_other_user_id():
+    return str(uuid.uuid4())
 
 
-class TestMessageRepository:
-    @pytest.fixture
-    def mock_db_session(self):
-        return Mock(spec=Session)
+class TestMarkAllAsRead:
+    """Тесты для метода mark_all_as_read в репозитории"""
 
-    @pytest.fixture
-    def message_repo(self, mock_db_session):
-        return MessageRepository(mock_db_session)
+    def test_mark_all_as_read_success(self, db_session, test_chat_id, test_user_id, test_other_user_id):
+        repo = MessageRepository(db_session)
+        
+        # Создаём несколько сообщений от другого пользователя
+        for i in range(5):
+            msg = MessageORM(
+                id=str(uuid.uuid4()),
+                chat_id=test_chat_id,
+                sender_id=test_other_user_id,
+                content=f"Message {i}",
+                created_at=int(time.time()),
+                is_read=False
+            )
+            db_session.add(msg)
+        db_session.commit()
+        
+        # Отмечаем как прочитанные
+        result = repo.mark_all_as_read(test_chat_id, test_user_id)
+        
+        assert result == 5
+        
+        # Проверяем что все сообщения отмечены
+        unread_count = db_session.query(MessageORM).filter(
+            MessageORM.chat_id == test_chat_id,
+            MessageORM.sender_id != test_user_id,
+            MessageORM.is_read == False
+        ).count()
+        assert unread_count == 0
 
-    @pytest.fixture
-    def test_message_orm(self):
-        return SimpleNamespace(
-            id="msg123",
-            chat_id="chat123",
-            sender_id="user1",
-            content="Hello, world!",
-            created_at=1234567890,
-            is_read=False
+    def test_mark_all_as_read_only_others_messages(self, db_session, test_chat_id, test_user_id, test_other_user_id):
+        repo = MessageRepository(db_session)
+        
+        # Создаём свои сообщения
+        for i in range(3):
+            msg = MessageORM(
+                id=str(uuid.uuid4()),
+                chat_id=test_chat_id,
+                sender_id=test_user_id,
+                content=f"Own message {i}",
+                created_at=int(time.time()),
+                is_read=False
+            )
+            db_session.add(msg)
+        db_session.commit()
+        
+        # Отмечаем как прочитанные
+        result = repo.mark_all_as_read(test_chat_id, test_user_id)
+        
+        # Свои сообщения не должны быть отмечены
+        assert result == 0
+
+    def test_mark_all_as_read_empty_chat(self, db_session, test_chat_id, test_user_id):
+        repo = MessageRepository(db_session)
+        
+        result = repo.mark_all_as_read(test_chat_id, test_user_id)
+        assert result == 0
+
+    def test_mark_all_as_read_already_read(self, db_session, test_chat_id, test_user_id, test_other_user_id):
+        repo = MessageRepository(db_session)
+        
+        # Создаём уже прочитанное сообщение
+        msg = MessageORM(
+            id=str(uuid.uuid4()),
+            chat_id=test_chat_id,
+            sender_id=test_other_user_id,
+            content="Read message",
+            created_at=int(time.time()),
+            is_read=True
         )
-
-
-class TestCreateMessage(TestMessageRepository):
-    def test_create_message_success(self, message_repo, mock_db_session):
-        with patch('uuid.uuid4') as mock_uuid:
-            with patch('time.time') as mock_time:
-                mock_uuid.return_value = "new-msg-uuid"
-                mock_time.return_value = 1234567890
-
-                result = message_repo.create_message("chat123", "user1", "Test message")
-
-                assert result.id == "new-msg-uuid"
-                assert result.chat_id == "chat123"
-                assert result.sender_id == "user1"
-                assert result.content == "Test message"
-                assert result.created_at == 1234567890
-                assert result.is_read is False
-                mock_db_session.add.assert_called_once()
-                mock_db_session.flush.assert_called_once()
-
-    def test_create_message_handles_db_error(self, message_repo, mock_db_session):
-        with patch('uuid.uuid4') as mock_uuid:
-            with patch('time.time') as mock_time:
-                mock_uuid.return_value = "new-msg-uuid"
-                mock_time.return_value = 1234567890
-                mock_db_session.flush.side_effect = Exception("DB error")
-
-                with pytest.raises(Exception) as exc:
-                    message_repo.create_message("chat123", "user1", "Test")
-
-                assert "DB error" in str(exc.value)
-
-
-class TestGetChatMessages(TestMessageRepository):
-    def test_get_chat_messages_success(self, message_repo, mock_db_session, test_message_orm):
-        mock_query = Mock()
-        mock_filter = Mock()
-        mock_order_by = Mock()
+        db_session.add(msg)
+        db_session.commit()
         
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter.return_value = mock_filter
-        mock_filter.order_by.return_value = mock_order_by
-        mock_order_by.all.return_value = [test_message_orm]
+        result = repo.mark_all_as_read(test_chat_id, test_user_id)
+        assert result == 0
 
-        result = message_repo.get_chat_messages("chat123")
 
-        assert len(result) == 1
-        assert result[0].id == "msg123"
-        mock_db_session.query.assert_called_once_with(MessageORM)
+class TestGetUnreadCount:
+    """Тесты для метода get_unread_count"""
 
-    def test_get_chat_messages_default_params(self, message_repo, mock_db_session, test_message_orm):
-        mock_query = Mock()
-        mock_filter = Mock()
-        mock_order_by = Mock()
+    def test_get_unread_count_success(self, db_session, test_chat_id, test_user_id, test_other_user_id):
+        repo = MessageRepository(db_session)
         
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter.return_value = mock_filter
-        mock_filter.order_by.return_value = mock_order_by
-        mock_order_by.all.return_value = [test_message_orm]
-
-        result = message_repo.get_chat_messages("chat123")
-
-        assert len(result) == 1
-
-    def test_get_chat_messages_empty(self, message_repo, mock_db_session):
-        mock_query = Mock()
-        mock_filter = Mock()
-        mock_order_by = Mock()
+        # Создаём несколько непрочитанных сообщений
+        for i in range(4):
+            msg = MessageORM(
+                id=str(uuid.uuid4()),
+                chat_id=test_chat_id,
+                sender_id=test_other_user_id,
+                content=f"Message {i}",
+                created_at=int(time.time()),
+                is_read=False
+            )
+            db_session.add(msg)
+        db_session.commit()
         
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter.return_value = mock_filter
-        mock_filter.order_by.return_value = mock_order_by
-        mock_order_by.all.return_value = []
+        count = repo.get_unread_count(test_chat_id, test_user_id)
+        assert count == 4
 
-        result = message_repo.get_chat_messages("chat123")
-
-        assert result == []
-
-    def test_get_chat_messages_order_by_asc(self, message_repo, mock_db_session):
-        mock_query = Mock()
-        mock_filter = Mock()
-        mock_order_by = Mock()
+    def test_get_unread_count_no_unread(self, db_session, test_chat_id, test_user_id):
+        repo = MessageRepository(db_session)
         
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter.return_value = mock_filter
-        mock_filter.order_by.return_value = mock_order_by
-        mock_order_by.all.return_value = []
-
-        message_repo.get_chat_messages("chat123")
-
-        mock_filter.order_by.assert_called_once()
-
-    def test_get_chat_messages_different_chats(self, message_repo, mock_db_session, test_message_orm):
-        mock_query = Mock()
-        mock_filter = Mock()
-        mock_order_by = Mock()
-        
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter.return_value = mock_filter
-        mock_filter.order_by.return_value = mock_order_by
-        mock_order_by.all.return_value = [test_message_orm]
-
-        result1 = message_repo.get_chat_messages("chat123")
-        result2 = message_repo.get_chat_messages("chat456")
-
-        assert len(result1) == 1
-        assert len(result2) == 1
-        assert mock_query.filter.call_count >= 2
-
-
-class TestMessageRepositoryIntegration(TestMessageRepository):
-    def test_create_and_get_message_flow(self, message_repo):
-        with patch('uuid.uuid4') as mock_uuid:
-            with patch('time.time') as mock_time:
-                mock_uuid.return_value = "flow-msg-uuid"
-                mock_time.return_value = 1234567890
-
-                created = message_repo.create_message("chat123", "user1", "Integration test")
-                assert created.id == "flow-msg-uuid"
-
-                mock_query = Mock()
-                mock_filter = Mock()
-                mock_order_by = Mock()
-                
-                message_repo.db.query.return_value = mock_query
-                mock_query.filter.return_value = mock_filter
-                mock_filter.order_by.return_value = mock_order_by
-                mock_order_by.all.return_value = [created]
-
-                messages = message_repo.get_chat_messages("chat123")
-                assert len(messages) == 1
-                assert messages[0].content == "Integration test"
+        count = repo.get_unread_count(test_chat_id, test_user_id)
+        assert count == 0

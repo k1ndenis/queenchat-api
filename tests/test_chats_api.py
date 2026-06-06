@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from main import app
+from unittest.mock import patch
 
 class TestChatAPI:
     @pytest.fixture(autouse=True)
@@ -38,11 +39,18 @@ class TestChatAPI:
         client.cookies.set("access_token", self.access_token)
         self.client = client
 
-    def test_create_private_chat_success(self):
+    @patch('app.services.chat_service.redis_cache')
+    def test_create_private_chat_success(self, mock_redis):
+        mock_redis.get.return_value = None
+        mock_redis.delete.return_value = None
+        mock_redis.set.return_value = None
+        
         response = self.client.post(
             "/api/chats/",
             json={"is_group": False, "participant_ids": ["otheruser"]}
         )
+        print(f"Response status: {response.status_code}")
+        print(f"Response body: {response.text}")
         assert response.status_code == 201
         data = response.json()
         assert data["is_group"] is False
@@ -54,6 +62,19 @@ class TestChatAPI:
         )
         assert response.status_code == 400
         assert "Username required" in response.text
+
+    def test_create_chat_user_not_found(self):
+        response = self.client.post(
+            "/api/chats/",
+            json={"is_group": False, "participant_ids": ["nonexistent"]}
+        )
+        assert response.status_code == 404
+        assert "User 'nonexistent' not found" in response.text
+
+    def test_mark_all_messages_as_read_invalid_chat(self, auth_client):
+        response = auth_client.post("/api/chats/invalid-id/messages/read/all")
+        assert response.status_code == 404
+        assert "Chat not found" in response.text or "Invalid chat ID" in response.text
 
     def test_create_chat_user_not_found(self):
         response = self.client.post(
@@ -277,3 +298,72 @@ class TestChatWebSocket:
                 pass
         except Exception as e:
             assert e is not None
+
+class TestMarkAllMessagesAsRead:
+    def test_mark_all_messages_as_read_success(self, auth_client, second_user_client):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": False, "participant_ids": ["seconduser"]}
+        )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        message_response = second_user_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "Test message"}
+        )
+        assert message_response.status_code == 200
+        
+        unread_response = auth_client.get(f"/api/chats/{chat_id}/messages/unread/count")
+        assert unread_response.json()["count"] == 1
+        
+        response = auth_client.post(f"/api/chats/{chat_id}/messages/read/all")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        
+        unread_response = auth_client.get(f"/api/chats/{chat_id}/messages/unread/count")
+        assert unread_response.json()["count"] == 0
+
+    def test_mark_all_messages_as_read_not_participant(self, auth_client, second_user_client):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": False, "participant_ids": ["seconduser"]}
+        )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        register_response = auth_client.post(
+            "/api/auth/register",
+            json={"email": "third@example.com", "username": "thirduser", "password": "123456"}
+        )
+        third_client = TestClient(app)
+        if register_response.status_code == 200:
+            token = register_response.cookies.get("access_token")
+        else:
+            login_response = auth_client.post(
+                "/api/auth/login",
+                json={"email": "third@example.com", "password": "123456"}
+            )
+            token = login_response.cookies.get("access_token")
+        third_client.cookies.set("access_token", token)
+        
+        response = third_client.post(f"/api/chats/{chat_id}/messages/read/all")
+        assert response.status_code == 403
+        assert "Not a participant" in response.text
+
+    def test_mark_all_messages_as_read_empty_chat(self, auth_client, second_user_client):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": False, "participant_ids": ["seconduser"]}
+        )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        response = auth_client.post(f"/api/chats/{chat_id}/messages/read/all")
+        assert response.status_code == 200
+        assert response.json()["marked_count"] == 0
+
+    def test_mark_all_messages_as_read_invalid_chat(self, auth_client):
+        response = auth_client.post("/api/chats/invalid-id/messages/read/all")
+        assert response.status_code == 404
+        assert "Chat not found" in response.text or "Invalid chat ID" in response.text

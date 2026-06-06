@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, status
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -137,26 +137,37 @@ def create_chat(
                 participant_ids=all_participants
             )
         else:
-            other_username = chat_data.participant_ids[0] if chat_data.participant_ids else None
+            if not chat_data.participant_ids or len(chat_data.participant_ids) == 0:
+                raise HTTPException(status_code=400, detail="Username required")
+            
+            other_username = chat_data.participant_ids[0]
             if not other_username:
                 raise HTTPException(status_code=400, detail="Username required")
+            
             auth_repo = AuthRepository(db)
             other_user = auth_repo.get_by_username(other_username)
             if not other_user:
                 raise HTTPException(status_code=404, detail=f"User '{other_username}' not found")
+            
             existing = service.repo.get_existing_private_chat(current_user.id, other_user.id)
             if existing:
                 return service.get_chat(existing.id)
+            
             chat = service.create_chat(
                 name=None,
                 is_group=False,
                 created_by=current_user.id,
                 participant_ids=[current_user.id, other_user.id]
             )
+        
         db.commit()
         return chat
+        
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
+        print(f"❌ Error creating chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/", response_model=List[ChatResponse])
@@ -419,34 +430,22 @@ async def mark_all_messages_as_read(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    from app.services.message_service import MessageService
-    from app.services.chat_service import ChatService
-    from app.core.websocket import manager
-    import asyncio
-    
-    chat_id = validate_chat_id(chat_id)
+    try:
+        chat_id = validate_chat_id(chat_id)
+    except HTTPException:
+        raise HTTPException(status_code=400, detail="Invalid chat ID")
     
     message_service = MessageService(db)
     chat_service = ChatService(db)
+    
+    chat = chat_service.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
     
     if not chat_service.is_participant(chat_id, current_user.id):
         raise HTTPException(status_code=403, detail="Not a participant")
     
     count = message_service.mark_all_as_read(chat_id, current_user.id)
     db.commit()
-    
-    print(f"📖 Marked {count} messages as read in chat {chat_id}")
-    
-    asyncio.create_task(
-        manager.broadcast_to_chat(
-            {
-                "type": "messages_read",
-                "chat_id": chat_id,
-                "user_id": current_user.id
-            },
-            chat_id=chat_id,
-            exclude_user_id=current_user.id
-        )
-    )
     
     return {"status": "ok", "marked_count": count}
