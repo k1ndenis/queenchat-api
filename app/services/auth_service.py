@@ -12,7 +12,6 @@ class AuthService:
         self.repository = AuthRepository(db)
 
     def get_all_users(self) -> list[UserSchema]:
-        # Проверяем кэш
         cached = redis_cache.get("all_users")
         if cached:
             return [UserSchema(**user) for user in cached]
@@ -27,7 +26,6 @@ class AuthService:
             ) for user_orm in users_orm
         ]
         
-        # Сохраняем в кэш
         redis_cache.set("all_users", [user.model_dump() for user in result])
         
         return result

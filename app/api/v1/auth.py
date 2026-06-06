@@ -105,7 +105,6 @@ def update_profile(
     if existing_email and existing_email.id != current_user.id:
         raise HTTPException(status_code=400, detail="Email already taken")
     
-    # Обновляем
     current_user.username = profile_data.username
     current_user.email = profile_data.email
     db.commit()

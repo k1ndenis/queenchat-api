@@ -23,7 +23,7 @@ class AuthRepository:
         return self.db.query(UserORM).filter(UserORM.username == username).first()
 
     def get_all_users(self) -> list[UserORM]:
-        return self.db.scalars(UserORM).all()
+        return self.db.query(UserORM).all()
 
     def create_user(self, username: str, email: str, password_hash: str) -> UserSchema:
         new_user = UserORM(
