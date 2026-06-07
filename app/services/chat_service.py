@@ -107,7 +107,18 @@ class ChatService:
                 redis_cache.delete(f"user_chats:{participant.id}")
         
         redis_cache.delete(f"chat:{chat_id}")
-        return self.repo.delete_chat(chat_id)
+        
+        # Добавьте подробное логирование
+        import traceback
+        try:
+            result = self.repo.delete_chat(chat_id)
+            if not result:
+                print(f"ОШИБКА: Не удалось удалить чат {chat_id}")
+            return result
+        except Exception as e:
+            print(f"КРИТИЧЕСКАЯ ОШИБКА при удалении: {e}")
+            print(traceback.format_exc())
+            raise
 
     def is_participant(self, chat_id: str, user_id: str) -> bool:
         return self.repo.is_participant(chat_id, user_id)

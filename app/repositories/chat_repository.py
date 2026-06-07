@@ -38,25 +38,30 @@ class ChatRepository:
 
     def delete_chat(self, chat_id: str) -> bool:
         try:
+            from app.core.database import NotificationORM
+            self.db.query(NotificationORM).filter(
+                NotificationORM.chat_id == chat_id
+            ).delete(synchronize_session=False)
+            
             self.db.query(ChatParticipantORM).filter(
                 ChatParticipantORM.chat_id == chat_id
-            ).delete()
+            ).delete(synchronize_session=False)
             
             self.db.query(MessageORM).filter(
                 MessageORM.chat_id == chat_id
-            ).delete()
+            ).delete(synchronize_session=False)
             
-            chat = self.db.query(ChatORM).filter(ChatORM.id == chat_id).first()
-            if chat:
-                self.db.delete(chat)
-                self.db.commit()
-                return True
-            return False
+            self.db.query(ChatORM).filter(ChatORM.id == chat_id).delete(synchronize_session=False)
+            
+            self.db.commit()
+            print(f"Chat {chat_id} deleted successfully with all related data")
+            return True
+            
         except Exception as e:
             self.db.rollback()
             print(f"Error deleting chat: {e}")
             return False
-
+            
     def add_participant(self, chat_id: str, user_id: str):
         participant = ChatParticipantORM(
             id=str(uuid.uuid4()),
