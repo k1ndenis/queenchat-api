@@ -116,3 +116,16 @@ def update_profile(
         "email": current_user.email,
         "created_at": current_user.created_at
     }
+
+@router.delete("/me", status_code=204)
+def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = AuthService(db)
+    success = service.delete_user(current_user.id)
+    
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to delete account")
+    
+    return None

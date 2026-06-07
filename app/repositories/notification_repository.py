@@ -102,3 +102,8 @@ class NotificationRepository:
         self.db.flush()
         print(f"📖 [REPO] Marked {result} notifications as read for chat {chat_id}")
         return result
+
+    def delete_by_chat(self, chat_id: str) -> None:
+        self.db.query(NotificationORM).filter(
+            NotificationORM.chat_id == chat_id
+        ).delete(synchronize_session=False)

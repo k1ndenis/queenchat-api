@@ -74,3 +74,8 @@ class MessageRepository:
         self.db.flush()
         print(f"📖 [REPO] Marked {result} messages as read in chat {chat_id} for user {user_id}")
         return result
+
+    def delete_by_chat(self, chat_id: str) -> None:
+        self.db.query(MessageORM).filter(
+            MessageORM.chat_id == chat_id
+        ).delete(synchronize_session=False)

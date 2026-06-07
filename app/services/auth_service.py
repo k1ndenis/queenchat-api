@@ -1,6 +1,9 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from app.repositories.auth_repository import AuthRepository
+from app.repositories.chat_repository import ChatRepository
+from app.repositories.message_repository import MessageRepository
+from app.repositories.notification_repository import NotificationRepository
 from app.models.user import UserSchema
 from app.models.auth import TokenResponse, RegisterRequest, LoginRequest
 from app.core.security import hash_password, create_token, verify_password
@@ -10,6 +13,9 @@ class AuthService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.repository = AuthRepository(db)
+        self.chat_repo = ChatRepository(db)
+        self.message_repo = MessageRepository(db)
+        self.notification_repo = NotificationRepository(db)
 
     def get_all_users(self) -> list[UserSchema]:
         cached = redis_cache.get("all_users")
@@ -73,6 +79,28 @@ class AuthService:
         }
     
     def delete_user(self, user_id: str) -> bool:
-        result = self.repository.delete_user(user_id)
-        redis_cache.delete("all_users")
-        return result
+        try:
+            user_chats = self.chat_repo.get_user_chats(user_id)
+            
+            for chat in user_chats:
+                self.notification_repo.delete_by_chat(chat.id)
+                self.message_repo.delete_by_chat(chat.id)
+                self.chat_repo.delete_participants(chat.id)
+                self.chat_repo.delete_chat(chat.id)
+            
+            redis_cache.delete("all_users")
+            redis_cache.delete(f"user:{user_id}")
+            redis_cache.delete(f"user_chats:{user_id}")
+            redis_cache.delete(f"notifications:{user_id}")
+            
+            result = self.repository.delete_user(user_id)
+            
+            self.db.commit()
+            return result
+            
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error deleting user {user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False

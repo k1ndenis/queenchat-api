@@ -37,3 +37,15 @@ class AuthRepository:
         self.db.commit()
         self.db.refresh(new_user)
         return new_user
+
+    def delete_user(self, user_id: str) -> bool:
+        try:
+            from app.core.database import UserORM
+            user = self.db.query(UserORM).filter(UserORM.id == user_id).first()
+            if user:
+                self.db.delete(user)
+                return True
+            return False
+        except Exception as e:
+            print(f"Error deleting user: {e}")
+            return False

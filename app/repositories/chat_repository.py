@@ -79,6 +79,11 @@ class ChatRepository:
             ChatParticipantORM.user_id == user_id
         ).first() is not None
 
+    def delete_participants(self, chat_id: str) -> None:
+        self.db.query(ChatParticipantORM).filter(
+            ChatParticipantORM.chat_id == chat_id
+        ).delete(synchronize_session=False)
+
     def get_user_chats(self, user_id: str) -> list[ChatORM]:
         return self.db.query(ChatORM).join(
             ChatParticipantORM
