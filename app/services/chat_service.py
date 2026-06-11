@@ -108,7 +108,6 @@ class ChatService:
         
         redis_cache.delete(f"chat:{chat_id}")
         
-        # Добавьте подробное логирование
         import traceback
         try:
             result = self.repo.delete_chat(chat_id)

@@ -399,7 +399,8 @@ def get_last_message(
                 "content": last_msg.content,
                 "created_at": last_msg.created_at,
                 "sender_id": last_msg.sender_id,
-                "sender_name": last_msg.sender.username if last_msg.sender else None
+                "sender_name": last_msg.sender.username if last_msg.sender else None,
+                "is_image": getattr(last_msg, 'is_image', False)
             }
         return None
         
