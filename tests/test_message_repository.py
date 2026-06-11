@@ -151,3 +151,88 @@ class TestGetUnreadCount:
         
         count = repo.get_unread_count(test_chat_id, test_user_id)
         assert count == 0
+
+class TestMessageRepositoryImage:
+    def test_create_message_with_is_image_true(self, db_session):
+        from app.repositories.message_repository import MessageRepository
+        from app.core.database import UserORM, ChatORM
+        import uuid
+        
+        user = UserORM(
+            id=str(uuid.uuid4()),
+            email="test@example.com",
+            username="testuser",
+            password_hash="hash",
+            created_at=1234567890
+        )
+        db_session.add(user)
+        
+        chat = ChatORM(
+            id=str(uuid.uuid4()),
+            name="Test Chat",
+            is_group=False,
+            created_by=user.id,
+            created_at=1234567890,
+            updated_at=1234567890
+        )
+        db_session.add(chat)
+        db_session.commit()
+        
+        repo = MessageRepository(db_session)
+        
+        message = repo.create_message(
+            chat_id=chat.id,
+            sender_id=user.id,
+            content="/uploads/images/test.jpg",
+            is_image=True
+        )
+        
+        assert message.is_image is True
+        assert message.content == "/uploads/images/test.jpg"
+        assert message.is_sticker is False
+        
+        db_session.delete(message)
+        db_session.delete(chat)
+        db_session.delete(user)
+        db_session.commit()
+    
+    def test_create_message_with_is_image_false_default(self, db_session):
+        from app.repositories.message_repository import MessageRepository
+        from app.core.database import UserORM, ChatORM
+        import uuid
+        
+        user = UserORM(
+            id=str(uuid.uuid4()),
+            email="test2@example.com",
+            username="testuser2",
+            password_hash="hash",
+            created_at=1234567890
+        )
+        db_session.add(user)
+        
+        chat = ChatORM(
+            id=str(uuid.uuid4()),
+            name="Test Chat 2",
+            is_group=False,
+            created_by=user.id,
+            created_at=1234567890,
+            updated_at=1234567890
+        )
+        db_session.add(chat)
+        db_session.commit()
+        
+        repo = MessageRepository(db_session)
+        
+        message = repo.create_message(
+            chat_id=chat.id,
+            sender_id=user.id,
+            content="Hello, world!"
+        )
+        
+        assert message.is_image is False
+        assert message.content == "Hello, world!"
+        
+        db_session.delete(message)
+        db_session.delete(chat)
+        db_session.delete(user)
+        db_session.commit()

@@ -8,7 +8,7 @@ class MessageRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def create_message(self, chat_id: str, sender_id: str, content: str, sticker_id: str = None, is_sticker: bool = False) -> MessageORM:
+    def create_message(self, chat_id: str, sender_id: str, content: str, sticker_id: str = None, is_sticker: bool = False, is_image: bool = False) -> MessageORM:
         message = MessageORM(
             id=str(uuid.uuid4()),
             chat_id=chat_id,
@@ -16,15 +16,12 @@ class MessageRepository:
             content=content,
             sticker_id=sticker_id,
             is_sticker=is_sticker,
+            is_image=is_image,
             created_at=int(time.time()),
             is_read=False
         )
         self.db.add(message)
         self.db.flush()
-        
-        print(f"📝 Message created and flushed: {message.id}")
-        print(f"   Chat: {chat_id}, Sender: {sender_id}")
-        
         return message
 
     def get_chat_messages(self, chat_id: str, limit: int = None, offset: int = 0) -> list[MessageORM]:

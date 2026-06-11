@@ -22,7 +22,8 @@ async def send_message(
 ) -> MessageResponse:
     chat_id = validate_chat_id(chat_id)
     
-    print(f"🔵 [MESSAGE] Sending to chat {chat_id} from user {current_user.id}")
+    print(f"📸 RAW message_data: {message_data}")
+    print(f"📸 message_data.is_image: {message_data.is_image}")
     
     try:
         message_service = MessageService(db)
@@ -33,18 +34,20 @@ async def send_message(
             chat_service.add_participant(chat_id, current_user.id)
             db.flush()
         
+        print(f"📸 BEFORE CREATE: is_image={message_data.is_image}, content={message_data.content[:50] if message_data.content else None}")
+
         message = message_service.create_message(
             chat_id=chat_id,
             sender_id=current_user.id,
-            content=message_data.content
-        )
+            content=message_data.content,
+            is_image=message_data.is_image
+)
         
         db.commit()
         db.refresh(message)
         
         print(f"✅ Message {message.id} COMMITTED to DB")
         
-        # ========== УВЕДОМЛЕНИЯ ==========
         print("=" * 60)
         print("🔔 [NOTIFICATION] Starting notification creation")
         print(f"🔔 [NOTIFICATION] Chat ID: {chat_id}")
@@ -86,7 +89,6 @@ async def send_message(
             traceback.print_exc()
         
         print("=" * 60)
-        # ========== КОНЕЦ УВЕДОМЛЕНИЙ ==========
         
         await manager.broadcast_to_chat(
             {
@@ -99,6 +101,7 @@ async def send_message(
                     "created_at": message.created_at,
                     "chat_id": chat_id,
                     "is_sticker": getattr(message, 'is_sticker', False),
+                    "is_image": getattr(message, 'is_image', False),
                     "is_read": message.is_read
                 }
             },

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, String, ForeignKey
+from sqlalchemy import create_engine, String, ForeignKey, Column, Integer, Boolean
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column, relationship
 import uuid
 import os
@@ -74,13 +74,15 @@ class ChatParticipantORM(Base):
 class MessageORM(Base):
     __tablename__ = "messages"
     
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id"))
     sender_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     content: Mapped[str] = mapped_column(String, nullable=True)
-    sticker_id: Mapped[str] = mapped_column(default=False)
-    is_sticker: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[int] = mapped_column(default=lambda: int(time.time()))
-    is_read: Mapped[bool] = mapped_column(default=False)
+    sticker_id: Mapped[str] = mapped_column(String, nullable=True)
+    is_sticker: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_image: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     
     chat: Mapped["ChatORM"] = relationship("ChatORM", back_populates="messages")
     sender: Mapped["UserORM"] = relationship("UserORM", foreign_keys=[sender_id], overlaps="messages")
@@ -98,6 +100,26 @@ class NotificationORM(Base):
     created_at: Mapped[int] = mapped_column(default=lambda: int(time.time()))
     
     user: Mapped["UserORM"] = relationship("UserORM", foreign_keys=[user_id])
+
+class FileORM(Base):
+    __tablename__ = "files"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    filename = Column(String, nullable=False)
+    original_name = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    file_size = Column(Integer, nullable=False)
+    mime_type = Column(String, nullable=False)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    chat_id = Column(String, ForeignKey("chats.id"), nullable=True)
+    created_at = Column(Integer, nullable=False, default=lambda: int(time.time()))
+    
+    user = relationship("UserORM", back_populates="files")
+    chat = relationship("ChatORM", back_populates="files")
+
+UserORM.files = relationship("FileORM", back_populates="user", cascade="all, delete-orphan")
+
+ChatORM.files = relationship("FileORM", back_populates="chat", cascade="all, delete-orphan")
 
 async def cleanup_old_notifications():
     while True:

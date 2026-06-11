@@ -300,13 +300,29 @@ class TestChatWebSocket:
             assert e is not None
 
 class TestMarkAllMessagesAsRead:
-    def test_mark_all_messages_as_read_success(self, auth_client, second_user_client):
+    def test_mark_all_messages_as_read_success(self, auth_client, second_user_client, db_session):
+        register_response = second_user_client.post(
+            "/api/auth/register",
+            json={"email": "second@example.com", "username": "seconduser", "password": "123456"}
+        )
+        if register_response.status_code != 200:
+            login_response = second_user_client.post(
+                "/api/auth/login",
+                json={"email": "second@example.com", "password": "123456"}
+            )
+            assert login_response.status_code == 200
+        
         chat_response = auth_client.post(
             "/api/chats/",
             json={"is_group": False, "participant_ids": ["seconduser"]}
         )
         assert chat_response.status_code == 201
         chat_id = chat_response.json()["id"]
+        
+        chat_info = auth_client.get(f"/api/chats/{chat_id}")
+        assert chat_info.status_code == 200
+        participants = chat_info.json().get("participants", [])
+        assert len(participants) == 2, f"Expected 2 participants, got {len(participants)}"
         
         message_response = second_user_client.post(
             f"/api/chats/{chat_id}/messages",
@@ -317,12 +333,12 @@ class TestMarkAllMessagesAsRead:
         unread_response = auth_client.get(f"/api/chats/{chat_id}/messages/unread/count")
         assert unread_response.json()["count"] == 1
         
-        response = auth_client.post(f"/api/chats/{chat_id}/messages/read/all")
-        assert response.status_code == 200
-        assert response.json()["status"] == "ok"
+        read_response = auth_client.post(f"/api/chats/{chat_id}/messages/read/all")
+        assert read_response.status_code == 200
+        assert read_response.json()["marked_count"] == 1
         
-        unread_response = auth_client.get(f"/api/chats/{chat_id}/messages/unread/count")
-        assert unread_response.json()["count"] == 0
+        unread_response2 = auth_client.get(f"/api/chats/{chat_id}/messages/unread/count")
+        assert unread_response2.json()["count"] == 0
 
     def test_mark_all_messages_as_read_not_participant(self, auth_client, second_user_client):
         chat_response = auth_client.post(
@@ -367,3 +383,79 @@ class TestMarkAllMessagesAsRead:
         response = auth_client.post("/api/chats/invalid-id/messages/read/all")
         assert response.status_code == 404
         assert "Chat not found" in response.text or "Invalid chat ID" in response.text
+
+class TestImageMessages:
+    def test_send_image_message_success(self, auth_client):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": True, "name": "Test Group", "participant_ids": []}
+        )
+        if chat_response.status_code != 201:
+            chat_response = auth_client.post(
+                "/api/chats/",
+                json={"is_group": False, "participant_ids": [auth_client.user_id]}
+            )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        response = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "/uploads/images/test.jpg", "is_image": True}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_image"] is True
+        assert data["content"] == "/uploads/images/test.jpg"
+    
+    def test_send_regular_message_without_is_image(self, auth_client):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": True, "name": "Test Group 2", "participant_ids": []}
+        )
+        if chat_response.status_code != 201:
+            chat_response = auth_client.post(
+                "/api/chats/",
+                json={"is_group": False, "participant_ids": [auth_client.user_id]}
+            )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        response = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "Hello, world!"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_image"] is False
+        assert data["content"] == "Hello, world!"
+    
+    def test_get_message_with_image_returns_is_image_true(self, auth_client):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": True, "name": "Test Group 3", "participant_ids": []}
+        )
+        if chat_response.status_code != 201:
+            chat_response = auth_client.post(
+                "/api/chats/",
+                json={"is_group": False, "participant_ids": [auth_client.user_id]}
+            )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        send_response = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "/uploads/images/photo.png", "is_image": True}
+        )
+        assert send_response.status_code == 200
+        
+        get_response = auth_client.get(f"/api/chats/{chat_id}/messages")
+        assert get_response.status_code == 200
+        messages = get_response.json()
+        
+        found = False
+        for msg in messages:
+            if msg["content"] == "/uploads/images/photo.png":
+                assert msg["is_image"] is True
+                found = True
+                break
+        assert found is True

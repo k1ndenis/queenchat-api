@@ -1,17 +1,14 @@
 import sys
 import os
+from unittest.mock import Mock
 
 os.environ["TESTING"] = "true"
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
-
 os.environ["DB_HOST"] = "localhost"
 os.environ["DB_PORT"] = "5432"
 os.environ["DB_NAME"] = "test"
 os.environ["DB_USER"] = "test"
 os.environ["DB_PASSWORD"] = "test"
-
-if "DATABASE_URL" in os.environ:
-    os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -22,6 +19,15 @@ from sqlalchemy.orm import sessionmaker
 from main import app
 from app.core.database import Base
 from app.core.dependency import get_db
+from app.core.websocket import manager
+from app.services.auth_service import AuthService
+from app.services.chat_service import ChatService
+from app.services.message_service import MessageService
+from app.services.notification_service import NotificationService
+from app.repositories.auth_repository import AuthRepository
+from app.repositories.chat_repository import ChatRepository
+from app.repositories.message_repository import MessageRepository
+from app.repositories.notification_repository import NotificationRepository
 
 DATABASE_URL = "sqlite:///./test.db"
 
@@ -61,57 +67,74 @@ def client(db_session):
 
 @pytest.fixture
 def auth_client(client):
-    register_response = client.post(
+    response = client.post(
         "/api/auth/register",
         json={"email": "test@example.com", "username": "testuser", "password": "123456"}
     )
-
-    if register_response.status_code == 200:
-        token = register_response.cookies.get("access_token")
-        user_id = register_response.json()["user"]["id"]
-    else:
-        login_response = client.post(
+    if response.status_code != 200:
+        response = client.post(
             "/api/auth/login",
             json={"email": "test@example.com", "password": "123456"}
         )
-        token = login_response.cookies.get("access_token")
-        user_id = login_response.json()["user"]["id"]
-
+    token = response.cookies.get("access_token")
     client.cookies.set("access_token", token)
-    client.user_id = user_id
+    client.user_id = response.json().get("user", {}).get("id", "test_user_id")
     yield client
-    client.cookies.clear()
 
 @pytest.fixture
-def second_user_client(client):
-    register_response = client.post(
+def second_user_client():
+    client = TestClient(app)
+    response = client.post(
         "/api/auth/register",
         json={"email": "second@example.com", "username": "seconduser", "password": "123456"}
     )
-
-    if register_response.status_code == 200:
-        token = register_response.cookies.get("access_token")
-        user_id = register_response.json()["user"]["id"]
-    else:
-        login_response = client.post(
+    if response.status_code != 200:
+        response = client.post(
             "/api/auth/login",
             json={"email": "second@example.com", "password": "123456"}
         )
-        token = login_response.cookies.get("access_token")
-        user_id = login_response.json()["user"]["id"]
+    token = response.cookies.get("access_token")
+    client.cookies.set("access_token", token)
+    client.user_id = response.json().get("user", {}).get("id")
+    yield client
 
-    second_client = TestClient(app)
-    second_client.cookies.set("access_token", token)
-    second_client.user_id = user_id
-    yield second_client
-    second_client.cookies.clear()
+@pytest.fixture
+def auth_repo(db_session):
+    return AuthRepository(db_session)
+
+@pytest.fixture
+def chat_repo(db_session):
+    return ChatRepository(db_session)
+
+@pytest.fixture
+def message_repo(db_session):
+    return MessageRepository(db_session)
 
 @pytest.fixture
 def notification_repo(db_session):
-    from app.repositories.notification_repository import NotificationRepository
     return NotificationRepository(db_session)
 
 @pytest.fixture
+def auth_service(db_session):
+    return AuthService(db_session)
+
+@pytest.fixture
+def chat_service(db_session):
+    return ChatService(db_session)
+
+@pytest.fixture
+def message_service(db_session):
+    return MessageService(db_session)
+
+@pytest.fixture
 def notification_service(db_session):
-    from app.services.notification_service import NotificationService
     return NotificationService(db_session)
+
+@pytest.fixture
+def mock_db_session():
+    return Mock()
+
+@pytest.fixture
+def mock_redis():
+    from unittest.mock import Mock
+    return Mock()

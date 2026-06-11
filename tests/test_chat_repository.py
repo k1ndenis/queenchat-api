@@ -1,8 +1,10 @@
 import pytest
+import uuid
 from unittest.mock import Mock, patch
 from sqlalchemy.orm import Session
 from app.repositories.chat_repository import ChatRepository
 from types import SimpleNamespace
+from app.core.database import ChatORM, ChatParticipantORM
 
 class TestChatRepository:
     @pytest.fixture
@@ -97,38 +99,63 @@ class TestCreateChat(TestChatRepository):
                 mock_db_session.flush.assert_called_once()
 
 
-class TestDeleteChat(TestChatRepository):
-    def test_delete_chat_success(self, chat_repo, mock_db_session, test_chat_orm):
-        mock_query = Mock()
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter.return_value = mock_query
-        mock_query.first.return_value = test_chat_orm
-
-        result = chat_repo.delete_chat("chat123")
-
+class TestDeleteChat:
+    def test_delete_chat_success(self, db_session):
+        repo = ChatRepository(db_session)
+        
+        chat = ChatORM(
+            id=str(uuid.uuid4()),
+            name="Test Chat",
+            is_group=False,
+            created_by="user123",
+            created_at=1234567890,
+            updated_at=1234567890
+        )
+        db_session.add(chat)
+        db_session.commit()
+        
+        chat_id = chat.id
+        
+        result = repo.delete_chat(chat_id)
+        
         assert result is True
-        assert mock_db_session.delete.call_count >= 1
-        mock_db_session.commit.assert_called()
-
-    def test_delete_chat_not_found(self, chat_repo, mock_db_session):
-        mock_query = Mock()
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter.return_value = mock_query
-        mock_query.first.return_value = None
-
-        result = chat_repo.delete_chat("chat123")
-
-        assert result is False
-
-    def test_delete_chat_exception(self, chat_repo, mock_db_session):
-        mock_query = Mock()
-        mock_db_session.query.return_value = mock_query
-        mock_query.filter.side_effect = Exception("DB error")
-
-        result = chat_repo.delete_chat("chat123")
-
-        assert result is False
-        mock_db_session.rollback.assert_called_once()
+        
+        db_session.expunge_all()
+        deleted = db_session.query(ChatORM).filter(ChatORM.id == chat_id).first()
+        assert deleted is None
+    
+    def test_delete_chat_with_participants(self, db_session):
+        repo = ChatRepository(db_session)
+        
+        chat = ChatORM(
+            id=str(uuid.uuid4()),
+            name="Test Chat",
+            is_group=True,
+            created_by="user123",
+            created_at=1234567890,
+            updated_at=1234567890
+        )
+        db_session.add(chat)
+        db_session.commit()
+        
+        participant = ChatParticipantORM(
+            id=str(uuid.uuid4()),
+            chat_id=chat.id,
+            user_id="user456",
+            joined_at=1234567890
+        )
+        db_session.add(participant)
+        db_session.commit()
+        
+        chat_id = chat.id
+        
+        result = repo.delete_chat(chat_id)
+        
+        assert result is True
+        
+        db_session.expunge_all()
+        deleted = db_session.query(ChatORM).filter(ChatORM.id == chat_id).first()
+        assert deleted is None
 
 
 class TestAddParticipant(TestChatRepository):

@@ -3,6 +3,7 @@ from typing import Optional
 
 class MessageCreate(BaseModel):
     content: str
+    is_image: bool = False
 
 class MessageResponse(BaseModel):
     id: str
@@ -10,6 +11,7 @@ class MessageResponse(BaseModel):
     sender_id: str
     content: Optional[str] = None
     sticker_id: Optional[str] = None
-    content: str
+    is_sticker: bool = False
+    is_image: bool = False
     created_at: int
     is_read: bool

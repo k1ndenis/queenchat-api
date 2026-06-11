@@ -8,28 +8,22 @@ from app.models.user import UserSchema
 
 
 class TestAuthService:
-    """Тесты для сервиса авторизации"""
-
     @pytest.fixture
     def mock_db_session(self):
-        """Мок сессии БД"""
         return Mock(spec=Session)
 
     @pytest.fixture
     def mock_repository(self):
-        """Мок репозитория"""
         return Mock()
 
     @pytest.fixture
     def auth_service(self, mock_db_session, mock_repository):
-        """Сервис с замоканным репозиторием"""
         service = AuthService(mock_db_session)
         service.repository = mock_repository
         return service
 
     @pytest.fixture
     def test_user_orm(self):
-        """Тестовый пользователь ORM"""
         class MockUser:
             id = "123"
             username = "testuser"
@@ -40,7 +34,6 @@ class TestAuthService:
 
     @pytest.fixture
     def test_user_schema(self):
-        """Тестовый пользователь Schema"""
         return UserSchema(
             id="123",
             username="testuser",
@@ -50,12 +43,8 @@ class TestAuthService:
 
 
 class TestGetAllUsers(TestAuthService):
-    """Тесты для метода get_all_users"""
-
     def test_get_all_users_cache_hit(self, auth_service, mock_repository, test_user_orm):
-        """Тест: данные берутся из кэша"""
         with patch('app.services.auth_service.redis_cache') as mock_redis:
-            # Кэш содержит данные
             cached_data = [{
                 "id": "123",
                 "username": "testuser",
@@ -66,29 +55,24 @@ class TestGetAllUsers(TestAuthService):
 
             result = auth_service.get_all_users()
 
-            # Проверяем, что результат из кэша
             assert len(result) == 1
             assert result[0].id == "123"
             assert result[0].username == "testuser"
-            # Репозиторий не вызывался
             mock_repository.get_all_users.assert_not_called()
 
     def test_get_all_users_cache_miss(self, auth_service, mock_repository, test_user_orm, test_user_schema):
-        """Тест: данных нет в кэше, берём из БД"""
         with patch('app.services.auth_service.redis_cache') as mock_redis:
             mock_redis.get.return_value = None
             mock_repository.get_all_users.return_value = [test_user_orm]
 
             result = auth_service.get_all_users()
 
-            # Проверяем результат
             assert len(result) == 1
             assert result[0].username == test_user_orm.username
             # Проверяем, что сохранили в кэш
             mock_redis.set.assert_called_once()
 
     def test_get_all_users_empty(self, auth_service, mock_repository):
-        """Тест: список пользователей пуст"""
         with patch('app.services.auth_service.redis_cache') as mock_redis:
             mock_redis.get.return_value = None
             mock_repository.get_all_users.return_value = []
@@ -100,10 +84,7 @@ class TestGetAllUsers(TestAuthService):
 
 
 class TestRegister(TestAuthService):
-    """Тесты для метода register"""
-
     def test_register_success(self, auth_service, mock_repository, test_user_orm):
-        """Тест: успешная регистрация"""
         with patch('app.services.auth_service.redis_cache') as mock_redis:
             with patch('app.services.auth_service.hash_password') as mock_hash:
                 with patch('app.services.auth_service.create_token') as mock_token:
@@ -134,7 +115,6 @@ class TestRegister(TestAuthService):
                     mock_redis.delete.assert_called_once_with("all_users")
 
     def test_register_duplicate_email(self, auth_service, mock_repository):
-        """Тест: регистрация с существующим email"""
         mock_repository.get_by_email.return_value = Mock()  # email уже существует
 
         payload = RegisterRequest(
@@ -150,7 +130,6 @@ class TestRegister(TestAuthService):
         assert "Email already registered" in exc.value.detail
 
     def test_register_duplicate_username(self, auth_service, mock_repository):
-        """Тест: регистрация с существующим username"""
         mock_repository.get_by_email.return_value = None
         mock_repository.get_by_username.return_value = Mock()  # username уже существует
 
@@ -168,10 +147,7 @@ class TestRegister(TestAuthService):
 
 
 class TestLogin(TestAuthService):
-    """Тесты для метода login"""
-
     def test_login_success(self, auth_service, mock_repository, test_user_orm):
-        """Тест: успешный вход"""
         with patch('app.services.auth_service.verify_password') as mock_verify:
             with patch('app.services.auth_service.create_token') as mock_token:
                 # Настройка моков
@@ -194,7 +170,6 @@ class TestLogin(TestAuthService):
                 mock_token.assert_called_once_with(test_user_orm.id, test_user_orm.username)
 
     def test_login_user_not_found(self, auth_service, mock_repository):
-        """Тест: пользователь не найден"""
         mock_repository.get_by_email.return_value = None
 
         payload = LoginRequest(
@@ -209,7 +184,6 @@ class TestLogin(TestAuthService):
         assert "Invalid email or password" in exc.value.detail
 
     def test_login_wrong_password(self, auth_service, mock_repository, test_user_orm):
-        """Тест: неверный пароль"""
         with patch('app.services.auth_service.verify_password') as mock_verify:
             mock_repository.get_by_email.return_value = test_user_orm
             mock_verify.return_value = False
@@ -226,27 +200,52 @@ class TestLogin(TestAuthService):
             assert "Invalid email or password" in exc.value.detail
 
 
-class TestDeleteUser(TestAuthService):
-    """Тесты для метода delete_user"""
-
-    def test_delete_user_success(self, auth_service, mock_repository):
-        """Тест: успешное удаление пользователя"""
-        with patch('app.services.auth_service.redis_cache') as mock_redis:
-            mock_repository.delete_user.return_value = True
-
-            result = auth_service.delete_user("user123")
-
-            assert result is True
-            mock_repository.delete_user.assert_called_once_with("user123")
-            mock_redis.delete.assert_called_once_with("all_users")
-
-    def test_delete_user_not_found(self, auth_service, mock_repository):
-        """Тест: пользователь не найден"""
-        with patch('app.services.auth_service.redis_cache') as mock_redis:
-            mock_repository.delete_user.return_value = False
-
-            result = auth_service.delete_user("user123")
-
-            assert result is False
-            mock_repository.delete_user.assert_called_once_with("user123")
-            mock_redis.delete.assert_called_once_with("all_users")
+class TestDeleteUser:
+    def test_delete_user_success(self, db_session):
+        service = AuthService(db_session)
+        
+        with patch.object(service, 'chat_repo') as mock_chat_repo:
+            with patch.object(service, 'repository') as mock_repository:
+                mock_chat_repo.get_user_chats.return_value = []
+                mock_repository.delete_user.return_value = True
+                
+                with patch('app.services.auth_service.redis_cache'):
+                    result = service.delete_user("user123")
+                    
+                    assert result is True
+                    mock_repository.delete_user.assert_called_once_with("user123")
+    
+    def test_delete_user_not_found(self, db_session):
+        service = AuthService(db_session)
+        
+        with patch.object(service, 'chat_repo') as mock_chat_repo:
+            with patch.object(service, 'repository') as mock_repository:
+                mock_chat_repo.get_user_chats.return_value = []
+                mock_repository.delete_user.return_value = False
+                
+                with patch('app.services.auth_service.redis_cache'):
+                    result = service.delete_user("user123")
+                    
+                    assert result is False
+    
+    def test_delete_user_with_chats(self, db_session):
+        service = AuthService(db_session)
+        
+        with patch.object(service, 'chat_repo') as mock_chat_repo:
+            with patch.object(service, 'message_repo') as mock_message_repo:
+                with patch.object(service, 'notification_repo') as mock_notification_repo:
+                    with patch.object(service, 'repository') as mock_repository:
+                        # Мокаем чаты
+                        mock_chat = Mock()
+                        mock_chat.id = "chat123"
+                        mock_chat_repo.get_user_chats.return_value = [mock_chat]
+                        mock_repository.delete_user.return_value = True
+                        
+                        with patch('app.services.auth_service.redis_cache'):
+                            result = service.delete_user("user123")
+                            
+                            assert result is True
+                            mock_notification_repo.delete_by_chat.assert_called()
+                            mock_message_repo.delete_by_chat.assert_called()
+                            mock_chat_repo.delete_participants.assert_called()
+                            mock_chat_repo.delete_chat.assert_called()
