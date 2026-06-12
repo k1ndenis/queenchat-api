@@ -8,7 +8,7 @@ from app.core.dependency import get_db, get_auth_service, get_current_user
 from app.core.database import UserORM as User
 from app.core.security import create_token
 from app.models.auth import RegisterRequest, LoginRequest
-from app.models.user import UserProfile
+from app.models.user import UserProfile, UpdateProfileRequest
 
 router = APIRouter()
 
@@ -91,33 +91,36 @@ def logout():
 
 @router.patch("/profile")
 def update_profile(
-    profile_data: ProfileUpdate,
+    profile_data: UpdateProfileRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     from app.repositories.auth_repository import AuthRepository
-    
+
     auth_repo = AuthRepository(db)
-    
+
     existing_user = auth_repo.get_by_username(profile_data.username)
     if existing_user and existing_user.id != current_user.id:
         raise HTTPException(status_code=400, detail="Username already taken")
-    
+
     existing_email = auth_repo.get_by_email(profile_data.email)
     if existing_email and existing_email.id != current_user.id:
         raise HTTPException(status_code=400, detail="Email already taken")
-    
+
     current_user.username = profile_data.username
     current_user.email = profile_data.email
+    if profile_data.avatar is not None:
+        current_user.avatar = profile_data.avatar
     db.commit()
     db.refresh(current_user)
-    
-    return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "email": current_user.email,
-        "created_at": current_user.created_at
-    }
+
+    return UserProfile(
+        id=current_user.id,
+        username=current_user.username,
+        email=current_user.email,
+        avatar=getattr(current_user, 'avatar', None),
+        created_at=current_user.created_at
+    )
 
 @router.delete("/me", status_code=204)
 def delete_account(

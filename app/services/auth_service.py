@@ -8,6 +8,7 @@ from app.models.user import UserSchema
 from app.models.auth import TokenResponse, RegisterRequest, LoginRequest
 from app.core.security import hash_password, create_token, verify_password
 from app.core.redis import redis_cache
+from app.core.database import UserORM
 
 class AuthService:
     def __init__(self, db: Session) -> None:

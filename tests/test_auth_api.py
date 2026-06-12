@@ -168,3 +168,23 @@ class TestAuthIntegration:
         )
         assert response2.status_code == 400
         assert "username already taken" in response2.text.lower()
+
+class TestProfileAvatar:
+    def test_update_profile_with_avatar(self, auth_client):
+        response = auth_client.patch(
+            "/api/auth/profile",
+            json={
+                "username": "testuser",
+                "email": "test@example.com",
+                "avatar": "/uploads/images/avatar_test.jpg"
+            }
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["avatar"] == "/uploads/images/avatar_test.jpg"
+    
+    def test_get_me_returns_avatar(self, auth_client):
+        response = auth_client.get("/api/auth/me")
+        assert response.status_code == 200
+        data = response.json()
+        assert "avatar" in data
