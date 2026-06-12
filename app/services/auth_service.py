@@ -104,3 +104,21 @@ class AuthService:
             import traceback
             traceback.print_exc()
             return False
+
+    def update_profile(self, user_id: str, username: str, email: str, avatar: str = None) -> UserORM | None:
+        user = self.repository.get_by_id(user_id)
+        if not user:
+            return None
+        
+        user.username = username
+        user.email = email
+        if avatar is not None:
+            user.avatar = avatar
+        
+        self.db.commit()
+        self.db.refresh(user)
+        
+        redis_cache.delete(f"user:{user_id}")
+        redis_cache.delete("all_users")
+        
+        return user

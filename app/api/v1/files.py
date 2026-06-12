@@ -59,3 +59,40 @@ async def upload_images(
         "errors": errors if errors else None,
         "count": len(uploaded_urls)
     }
+
+@router.post("/upload-avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    file.file.seek(0, 2)
+    size = file.file.tell()
+    file.file.seek(0)
+    if size > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 2MB)")
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    new_filename = f"avatar_{current_user.id}{ext}"
+    file_path = UPLOAD_DIR / new_filename
+    
+    content = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    avatar_url = f"/uploads/images/{new_filename}"
+    
+    from app.services.auth_service import AuthService
+    auth_service = AuthService(db)
+    auth_service.update_profile(
+        user_id=current_user.id,
+        username=current_user.username,
+        email=current_user.email,
+        avatar=avatar_url
+    )
+    db.commit()
+    
+    return {"success": True, "url": avatar_url}

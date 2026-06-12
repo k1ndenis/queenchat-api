@@ -25,6 +25,7 @@ class ChatService:
                 participants.append(ParticipantResponse(
                     user_id=participant.id,
                     username=participant.username,
+                    avatar=participant.avatar if hasattr(participant, 'avatar') else None,
                     joined_at=chat.created_at
                 ))
             result.append(ChatResponse(

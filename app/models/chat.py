@@ -9,6 +9,7 @@ class ChatCreate(BaseModel):
 class ParticipantResponse(BaseModel):
     user_id: str
     username: str
+    avatar: Optional[str] = None
     joined_at: int
 
 class ChatResponse(BaseModel):

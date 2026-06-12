@@ -8,6 +8,7 @@ from app.core.dependency import get_db, get_auth_service, get_current_user
 from app.core.database import UserORM as User
 from app.core.security import create_token
 from app.models.auth import RegisterRequest, LoginRequest
+from app.models.user import UserProfile
 
 router = APIRouter()
 
@@ -73,6 +74,7 @@ def get_me(current_user: User = Depends(get_current_user)):
         "id": current_user.id,
         "username": current_user.username,
         "email": current_user.email,
+        "avatar": current_user.avatar,
         "created_at": current_user.created_at
     }
 
@@ -129,3 +131,33 @@ def delete_account(
         raise HTTPException(status_code=400, detail="Failed to delete account")
     
     return None
+
+@router.patch("/profile", response_model=UserProfile)
+def update_profile(
+    request: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = AuthService(db)
+    
+    if request.username != current_user.username:
+        existing = service.repository.get_by_username(request.username)
+        if existing:
+            raise HTTPException(status_code=400, detail="Username already taken")
+    
+    if request.email != current_user.email:
+        existing = service.repository.get_by_email(request.email)
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already taken")
+    
+    user = service.update_profile(
+        user_id=current_user.id,
+        username=request.username,
+        email=request.email,
+        avatar=request.avatar
+    )
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return user

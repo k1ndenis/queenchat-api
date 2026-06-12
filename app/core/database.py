@@ -36,6 +36,7 @@ class UserORM(Base):
     
     email: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     username: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    avatar: Mapped[str] = mapped_column(String, nullable=True)
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[int] = mapped_column(nullable=False)
 
