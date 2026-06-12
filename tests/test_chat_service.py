@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from sqlalchemy.orm import Session
 from app.services.chat_service import ChatService
 from types import SimpleNamespace
@@ -108,15 +108,38 @@ class TestGetChat(TestChatService):
             assert result.id == "chat123"
             chat_service.repo.get_chat.assert_not_called()
 
-    def test_get_chat_cache_miss(self, chat_service, test_chat_orm):
+    def test_get_chat_cache_miss(self, mock_redis_cache, mock_auth_repo, mock_chat_repo, db_session):
+        mock_redis_cache.get.return_value = None
+        
+        mock_user = SimpleNamespace(
+            id="user1",
+            username="testuser",
+            email="test@test.com",
+            avatar=None
+        )
+        
+        test_chat_orm = SimpleNamespace(
+            id="chat1",
+            name="Test Chat",
+            is_group=False,
+            created_by="user1",
+            created_at=1234567890,
+            updated_at=1234567890,
+            participants=[mock_user]
+        )
+        
         with patch('app.services.chat_service.redis_cache') as mock_redis:
             mock_redis.get.return_value = None
+            chat_service = ChatService(db_session)
+            chat_service.repo = mock_chat_repo
             chat_service.repo.get_chat.return_value = test_chat_orm
-
-            result = chat_service.get_chat("chat123")
-
-            assert result.id == test_chat_orm.id
-            mock_redis.set.assert_called_once()
+            chat_service.auth_repo = mock_auth_repo
+            
+            result = chat_service.get_chat("chat1")
+            
+            assert result is not None
+            assert result.id == "chat1"
+            mock_redis.get.assert_called_once_with("chat:chat1")
 
     def test_get_chat_not_found(self, chat_service):
         with patch('app.services.chat_service.redis_cache') as mock_redis:

@@ -82,7 +82,7 @@ class TestGetAllUsers(TestAuthService):
             result = auth_service.get_all_users()
 
             assert result == []
-            mock_redis.set.assert_called_once_with("all_users", [])
+            mock_redis.set.assert_called_once_with("all_users", [], ttl=300)
 
 
 class TestRegister(TestAuthService):

@@ -18,9 +18,26 @@ class ProfileUpdate(BaseModel):
 
 @router.get("/get_users")
 def get_users(
+    auth_service: AuthService = Depends(get_auth_service),
+    current_user: User = Depends(get_current_user)
+):
+    return auth_service.get_all_users(exclude_current=True, current_user_id=current_user.id)
+
+@router.get("/users/{user_id}")
+def get_user_profile(
+    user_id: str,
+    current_user: User = Depends(get_current_user),
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    return auth_service.get_all_users()
+    user_profile = auth_service.get_user_profile(user_id)
+    
+    if not user_profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
+    
+    return user_profile
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(
@@ -89,52 +106,6 @@ def logout():
     response.delete_cookie("access_token", path="/")
     return response
 
-@router.patch("/profile")
-def update_profile(
-    profile_data: UpdateProfileRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    from app.repositories.auth_repository import AuthRepository
-
-    auth_repo = AuthRepository(db)
-
-    existing_user = auth_repo.get_by_username(profile_data.username)
-    if existing_user and existing_user.id != current_user.id:
-        raise HTTPException(status_code=400, detail="Username already taken")
-
-    existing_email = auth_repo.get_by_email(profile_data.email)
-    if existing_email and existing_email.id != current_user.id:
-        raise HTTPException(status_code=400, detail="Email already taken")
-
-    current_user.username = profile_data.username
-    current_user.email = profile_data.email
-    if profile_data.avatar is not None:
-        current_user.avatar = profile_data.avatar
-    db.commit()
-    db.refresh(current_user)
-
-    return UserProfile(
-        id=current_user.id,
-        username=current_user.username,
-        email=current_user.email,
-        avatar=getattr(current_user, 'avatar', None),
-        created_at=current_user.created_at
-    )
-
-@router.delete("/me", status_code=204)
-def delete_account(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    service = AuthService(db)
-    success = service.delete_user(current_user.id)
-    
-    if not success:
-        raise HTTPException(status_code=400, detail="Failed to delete account")
-    
-    return None
-
 @router.patch("/profile", response_model=UserProfile)
 def update_profile(
     request: UpdateProfileRequest,
@@ -163,4 +134,23 @@ def update_profile(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    return user
+    return UserProfile(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        avatar=user.avatar,
+        created_at=user.created_at
+    )
+
+@router.delete("/me", status_code=204)
+def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = AuthService(db)
+    success = service.delete_user(current_user.id)
+    
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to delete account")
+    
+    return None

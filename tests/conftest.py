@@ -1,6 +1,6 @@
 import sys
 import os
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 os.environ["TESTING"] = "true"
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
@@ -138,3 +138,16 @@ def mock_db_session():
 def mock_redis():
     from unittest.mock import Mock
     return Mock()
+
+@pytest.fixture
+def mock_redis_cache():
+    with patch('app.services.chat_service.redis_cache') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_auth_repo():
+    return MagicMock()
+
+@pytest.fixture
+def mock_chat_repo():
+    return MagicMock()

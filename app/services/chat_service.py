@@ -56,6 +56,7 @@ class ChatService:
             participants.append({
                 "user_id": user.id,
                 "username": user.username,
+                "avatar": user.avatar,
                 "joined_at": chat.created_at
             })
         

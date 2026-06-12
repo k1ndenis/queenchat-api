@@ -15,7 +15,7 @@ UPLOAD_DIR = Path("/app/uploads/images")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB per file
+MAX_FILE_SIZE = 10 * 1024 * 1024
 MAX_FILES = 10
 
 @router.post("/upload-images")
@@ -72,8 +72,8 @@ async def upload_avatar(
     file.file.seek(0, 2)
     size = file.file.tell()
     file.file.seek(0)
-    if size > 2 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large (max 2MB)")
+    if size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
     
     ext = os.path.splitext(file.filename)[1].lower()
     new_filename = f"avatar_{current_user.id}{ext}"

@@ -18,12 +18,40 @@ class AuthService:
         self.message_repo = MessageRepository(db)
         self.notification_repo = NotificationRepository(db)
 
-    def get_all_users(self) -> list[UserSchema]:
-        cached = redis_cache.get("all_users")
+    def get_user_profile(self, user_id: str) -> UserSchema | None:
+        cached = redis_cache.get(f"user_profile:{user_id}")
+        if cached:
+            return UserSchema(**cached)
+        
+        user_orm = self.repository.get_by_id(user_id)
+        if not user_orm:
+            return None
+        
+        result = UserSchema(
+            id=user_orm.id,
+            username=user_orm.username,
+            email=user_orm.email,
+            avatar=user_orm.avatar,
+            created_at=user_orm.created_at
+        )
+        
+        redis_cache.set(f"user_profile:{user_id}", result.model_dump(), ttl=300)
+        
+        return result
+
+    def get_all_users(self, exclude_current: bool = True, current_user_id: str = None) -> list[UserSchema]:
+        cache_key = "all_users"
+        if exclude_current and current_user_id:
+            cache_key = f"all_users_exclude_{current_user_id}"
+        
+        cached = redis_cache.get(cache_key)
         if cached:
             return [UserSchema(**user) for user in cached]
         
-        users_orm = self.repository.get_all_users()
+        users_orm = self.repository.get_all_users(
+            exclude_user_id=current_user_id if exclude_current else None
+        )
+        
         result = [
             UserSchema(
                 id=user_orm.id,
@@ -34,7 +62,7 @@ class AuthService:
             ) for user_orm in users_orm
         ]
         
-        redis_cache.set("all_users", [user.model_dump() for user in result])
+        redis_cache.set(cache_key, [user.model_dump() for user in result], ttl=300)
         
         return result
 
@@ -49,6 +77,7 @@ class AuthService:
         user = self.repository.create_user(payload.username, payload.email, hashed_password)
         
         redis_cache.delete("all_users")
+        redis_cache.delete_pattern("all_users_exclude_*")
         
         token = create_token(user.id, user.username)
         
@@ -91,6 +120,8 @@ class AuthService:
                 self.chat_repo.delete_chat(chat.id)
             
             redis_cache.delete("all_users")
+            redis_cache.delete_pattern("all_users_exclude_*")
+            redis_cache.delete(f"user_profile:{user_id}")
             redis_cache.delete(f"user:{user_id}")
             redis_cache.delete(f"user_chats:{user_id}")
             redis_cache.delete(f"notifications:{user_id}")
@@ -108,19 +139,11 @@ class AuthService:
             return False
 
     def update_profile(self, user_id: str, username: str, email: str, avatar: str = None) -> UserORM | None:
-        user = self.repository.get_by_id(user_id)
-        if not user:
-            return None
+        user = self.repository.update_user(user_id, username, email, avatar)
         
-        user.username = username
-        user.email = email
-        if avatar is not None:
-            user.avatar = avatar
-        
-        self.db.commit()
-        self.db.refresh(user)
-        
-        redis_cache.delete(f"user:{user_id}")
-        redis_cache.delete("all_users")
+        if user:
+            redis_cache.delete(f"user_profile:{user_id}")
+            redis_cache.delete("all_users")
+            redis_cache.delete_pattern("all_users_exclude_*")
         
         return user
