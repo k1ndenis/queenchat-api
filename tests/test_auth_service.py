@@ -28,6 +28,7 @@ class TestAuthService:
             id = "123"
             username = "testuser"
             email = "test@example.com"
+            avatar=None
             created_at = 1234567890
             password_hash = "hashed_password"
         return MockUser()
@@ -38,6 +39,7 @@ class TestAuthService:
             id="123",
             username="testuser",
             email="test@example.com",
+            avatar=None,
             created_at=1234567890
         )
 

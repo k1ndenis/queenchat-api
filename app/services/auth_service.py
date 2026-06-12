@@ -29,6 +29,7 @@ class AuthService:
                 id=user_orm.id,
                 username=user_orm.username,
                 email=user_orm.email,
+                avatar=user_orm.avatar,
                 created_at=user_orm.created_at
             ) for user_orm in users_orm
         ]
