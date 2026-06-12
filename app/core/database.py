@@ -81,11 +81,14 @@ class MessageORM(Base):
     sticker_id: Mapped[str] = mapped_column(String, nullable=True)
     is_sticker: Mapped[bool] = mapped_column(Boolean, default=False)
     is_image: Mapped[bool] = mapped_column(Boolean, default=False)
+    reply_to_id: Mapped[str] = mapped_column(String, ForeignKey("messages.id"), nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     
     chat: Mapped["ChatORM"] = relationship("ChatORM", back_populates="messages")
     sender: Mapped["UserORM"] = relationship("UserORM", foreign_keys=[sender_id], overlaps="messages")
+    reply_to: Mapped["MessageORM"] = relationship("MessageORM", remote_side=[id], foreign_keys=[reply_to_id])
+    replies: Mapped[list["MessageORM"]] = relationship("MessageORM", foreign_keys=[reply_to_id])
 
 class NotificationORM(Base):
     __tablename__ = "notifications"

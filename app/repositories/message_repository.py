@@ -8,7 +8,15 @@ class MessageRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def create_message(self, chat_id: str, sender_id: str, content: str, sticker_id: str = None, is_sticker: bool = False, is_image: bool = False) -> MessageORM:
+    def create_message(self,
+        chat_id: str,
+        sender_id: str,
+        content: str,
+        sticker_id: str = None,
+        is_sticker: bool = False,
+        is_image: bool = False,
+        reply_to_id: str = None
+    ) -> MessageORM:
         message = MessageORM(
             id=str(uuid.uuid4()),
             chat_id=chat_id,
@@ -17,9 +25,11 @@ class MessageRepository:
             sticker_id=sticker_id,
             is_sticker=is_sticker,
             is_image=is_image,
+            reply_to_id=reply_to_id,
             created_at=int(time.time()),
             is_read=False
         )
+        print(f"📸 REPO: is_image={is_image}, reply_to_id={reply_to_id}, content={content[:50] if content else None}")
         self.db.add(message)
         self.db.flush()
         return message
@@ -76,3 +86,6 @@ class MessageRepository:
         self.db.query(MessageORM).filter(
             MessageORM.chat_id == chat_id
         ).delete(synchronize_session=False)
+
+    def get_message(self, message_id: str) -> MessageORM | None:
+        return self.db.query(MessageORM).filter(MessageORM.id == message_id).first()

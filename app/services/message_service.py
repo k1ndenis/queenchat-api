@@ -7,10 +7,23 @@ class MessageService:
     def __init__(self, db: Session):
         self.repo = MessageRepository(db)
     
-    def create_message(self, chat_id: str, sender_id: str, content: str = None, sticker_id: str = None, is_image: bool = False):
+    def create_message(self,
+        chat_id: str,
+        sender_id: str,
+        content: str = None,
+        sticker_id: str = None,
+        is_image: bool = False,
+        reply_to_id: str = None
+    ):
         is_sticker = sticker_id is not None
         message = self.repo.create_message(
-            chat_id, sender_id, content, sticker_id, is_sticker, is_image
+            chat_id,
+            sender_id,
+            content,
+            sticker_id,
+            is_sticker,
+            is_image,
+            reply_to_id
         )
         redis_cache.delete(f"chat_messages:{chat_id}")
         return message
@@ -29,3 +42,6 @@ class MessageService:
 
     def mark_all_as_read(self, chat_id: str, user_id: str) -> int:
         return self.repo.mark_all_as_read(chat_id, user_id)
+
+    def get_message(self, message_id: str) -> MessageORM | None:
+        return self.repo.get_message(message_id)

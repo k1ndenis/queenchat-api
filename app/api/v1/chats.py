@@ -203,7 +203,8 @@ async def send_message(
             chat_id=chat_id,
             sender_id=current_user.id,
             content=message_data.content,
-            is_image=message_data.is_image
+            is_image=message_data.is_image,
+            reply_to_id=message_data.reply_to_id
         )
         
         db.commit()

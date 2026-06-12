@@ -22,9 +22,6 @@ async def send_message(
 ) -> MessageResponse:
     chat_id = validate_chat_id(chat_id)
     
-    print(f"📸 RAW message_data: {message_data}")
-    print(f"📸 message_data.is_image: {message_data.is_image}")
-    
     try:
         message_service = MessageService(db)
         chat_service = ChatService(db)
@@ -34,14 +31,14 @@ async def send_message(
             chat_service.add_participant(chat_id, current_user.id)
             db.flush()
         
-        print(f"📸 BEFORE CREATE: is_image={message_data.is_image}, content={message_data.content[:50] if message_data.content else None}")
-
+        print(f"📸 BEFORE CREATE: is_image={message_data.is_image}, reply_to_id={getattr(message_data, 'reply_to_id', None)}, content={message_data.content[:50] if message_data.content else None}")
         message = message_service.create_message(
             chat_id=chat_id,
             sender_id=current_user.id,
             content=message_data.content,
-            is_image=message_data.is_image
-)
+            is_image=message_data.is_image,
+            reply_to_id=message_data.reply_to_id if hasattr(message_data, 'reply_to_id') else None
+        )
         
         db.commit()
         db.refresh(message)
@@ -146,9 +143,42 @@ def get_messages(
         
         messages = message_service.get_chat_messages(chat_id, limit=limit, offset=offset)
         
-        print(f"📨 Loaded {len(messages)} messages for user {current_user.id}")
+        result = []
+        for msg in messages:
+            msg_dict = {
+                "id": msg.id,
+                "chat_id": msg.chat_id,
+                "sender_id": msg.sender_id,
+                "content": msg.content,
+                "sticker_id": msg.sticker_id,
+                "is_sticker": msg.is_sticker,
+                "is_image": msg.is_image,
+                "reply_to_id": msg.reply_to_id,
+                "created_at": msg.created_at,
+                "is_read": msg.is_read,
+            }
+            
+            if msg.reply_to_id:
+                reply_msg = message_service.get_message(msg.reply_to_id)
+                if reply_msg:
+                    msg_dict["reply_to_message"] = {
+                        "id": reply_msg.id,
+                        "chat_id": reply_msg.chat_id,
+                        "sender_id": reply_msg.sender_id,
+                        "content": reply_msg.content,
+                        "sticker_id": reply_msg.sticker_id,
+                        "is_sticker": reply_msg.is_sticker,
+                        "is_image": reply_msg.is_image,
+                        "reply_to_id": reply_msg.reply_to_id,
+                        "created_at": reply_msg.created_at,
+                        "is_read": reply_msg.is_read,
+                    }
+            
+            result.append(msg_dict)
         
-        return messages
+        print(f"📨 Loaded {len(result)} messages for user {current_user.id}")
+        
+        return result
         
     except Exception as e:
         print(f"❌ Error loading messages: {e}")
