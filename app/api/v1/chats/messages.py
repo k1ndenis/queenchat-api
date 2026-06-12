@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+import json
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
 from app.core.database import MessageORM
@@ -31,12 +32,14 @@ async def send_message(
             chat_service.add_participant(chat_id, current_user.id)
             db.flush()
         
-        print(f"📸 BEFORE CREATE: is_image={message_data.is_image}, reply_to_id={getattr(message_data, 'reply_to_id', None)}, content={message_data.content[:50] if message_data.content else None}")
+        images_json = json.dumps(message_data.images) if message_data.images else None
+
         message = message_service.create_message(
             chat_id=chat_id,
             sender_id=current_user.id,
             content=message_data.content,
             is_image=message_data.is_image,
+            images=images_json,
             reply_to_id=message_data.reply_to_id if hasattr(message_data, 'reply_to_id') else None
         )
         
@@ -86,6 +89,8 @@ async def send_message(
             traceback.print_exc()
         
         print("=" * 60)
+
+        images_list = json.loads(message.images) if message.images else None
         
         await manager.broadcast_to_chat(
             {
@@ -99,6 +104,7 @@ async def send_message(
                     "chat_id": chat_id,
                     "is_sticker": getattr(message, 'is_sticker', False),
                     "is_image": getattr(message, 'is_image', False),
+                    "images": images_list,
                     "is_read": message.is_read
                 }
             },
@@ -106,7 +112,19 @@ async def send_message(
             exclude_user_id=current_user.id
         )
         
-        return message
+        return MessageResponse(
+            id=message.id,
+            chat_id=message.chat_id,
+            sender_id=message.sender_id,
+            content=message.content,
+            sticker_id=message.sticker_id,
+            is_sticker=message.is_sticker,
+            is_image=message.is_image,
+            images=json.loads(message.images) if message.images else None,
+            reply_to_id=message.reply_to_id,
+            created_at=message.created_at,
+            is_read=message.is_read
+        )
         
     except Exception as e:
         db.rollback()
@@ -145,36 +163,20 @@ def get_messages(
         
         result = []
         for msg in messages:
-            msg_dict = {
-                "id": msg.id,
-                "chat_id": msg.chat_id,
-                "sender_id": msg.sender_id,
-                "content": msg.content,
-                "sticker_id": msg.sticker_id,
-                "is_sticker": msg.is_sticker,
-                "is_image": msg.is_image,
-                "reply_to_id": msg.reply_to_id,
-                "created_at": msg.created_at,
-                "is_read": msg.is_read,
-            }
-            
-            if msg.reply_to_id:
-                reply_msg = message_service.get_message(msg.reply_to_id)
-                if reply_msg:
-                    msg_dict["reply_to_message"] = {
-                        "id": reply_msg.id,
-                        "chat_id": reply_msg.chat_id,
-                        "sender_id": reply_msg.sender_id,
-                        "content": reply_msg.content,
-                        "sticker_id": reply_msg.sticker_id,
-                        "is_sticker": reply_msg.is_sticker,
-                        "is_image": reply_msg.is_image,
-                        "reply_to_id": reply_msg.reply_to_id,
-                        "created_at": reply_msg.created_at,
-                        "is_read": reply_msg.is_read,
-                    }
-            
-            result.append(msg_dict)
+            response = MessageResponse(
+                id=msg.id,
+                chat_id=msg.chat_id,
+                sender_id=msg.sender_id,
+                content=msg.content,
+                sticker_id=msg.sticker_id,
+                is_sticker=msg.is_sticker,
+                is_image=msg.is_image,
+                images=json.loads(msg.images) if msg.images else None,
+                reply_to_id=msg.reply_to_id,
+                created_at=msg.created_at,
+                is_read=msg.is_read
+            )
+            result.append(response)
         
         print(f"📨 Loaded {len(result)} messages for user {current_user.id}")
         

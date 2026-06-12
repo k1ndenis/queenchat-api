@@ -1,6 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+import json
 
 from app.core.websocket import manager, get_current_user_ws
 from app.core.dependency import get_db, get_current_user
@@ -199,11 +200,13 @@ async def send_message(
             chat_service.add_participant(chat_id, current_user.id)
             db.flush()
         
+        images_json = json.dumps(message_data.images) if message_data.images else None
+
         message = message_service.create_message(
             chat_id=chat_id,
             sender_id=current_user.id,
             content=message_data.content,
-            is_image=message_data.is_image,
+            is_image=message_data.is_image or bool(message_data.images),
             reply_to_id=message_data.reply_to_id
         )
         

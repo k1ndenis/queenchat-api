@@ -1,6 +1,7 @@
 import pytest
 import uuid
 import time
+import json
 from unittest.mock import Mock
 from sqlalchemy.orm import Session
 from app.repositories.message_repository import MessageRepository
@@ -236,3 +237,171 @@ class TestMessageRepositoryImage:
         db_session.delete(chat)
         db_session.delete(user)
         db_session.commit()
+
+class TestMessageRepositoryReply:
+    def test_create_message_with_reply_to(self, db_session):
+        from app.repositories.message_repository import MessageRepository
+        from app.core.database import UserORM, ChatORM
+        import uuid
+        
+        user = UserORM(
+            id=str(uuid.uuid4()),
+            email="test@example.com",
+            username="testuser",
+            password_hash="hash",
+            created_at=1234567890
+        )
+        db_session.add(user)
+        
+        chat = ChatORM(
+            id=str(uuid.uuid4()),
+            name="Test Chat",
+            is_group=False,
+            created_by=user.id,
+            created_at=1234567890,
+            updated_at=1234567890
+        )
+        db_session.add(chat)
+        
+        repo = MessageRepository(db_session)
+        msg1 = repo.create_message(
+            chat_id=chat.id,
+            sender_id=user.id,
+            content="Original"
+        )
+        
+        msg2 = repo.create_message(
+            chat_id=chat.id,
+            sender_id=user.id,
+            content="Reply",
+            reply_to_id=msg1.id
+        )
+        
+        assert msg2.reply_to_id == msg1.id
+        assert msg2.content == "Reply"
+        
+        db_session.rollback()
+    
+    def test_get_message_with_reply_to_relationship(self, db_session):
+        from app.repositories.message_repository import MessageRepository
+        from app.core.database import UserORM, ChatORM
+        import uuid
+        
+        user = UserORM(
+            id=str(uuid.uuid4()),
+            email="test@example.com",
+            username="testuser",
+            password_hash="hash",
+            created_at=1234567890
+        )
+        db_session.add(user)
+        
+        chat = ChatORM(
+            id=str(uuid.uuid4()),
+            name="Test Chat",
+            is_group=False,
+            created_by=user.id,
+            created_at=1234567890,
+            updated_at=1234567890
+        )
+        db_session.add(chat)
+        db_session.commit()
+        
+        repo = MessageRepository(db_session)
+        
+        msg1 = repo.create_message(
+            chat_id=chat.id,
+            sender_id=user.id,
+            content="Original"
+        )
+        msg2 = repo.create_message(
+            chat_id=chat.id,
+            sender_id=user.id,
+            content="Reply",
+            reply_to_id=msg1.id
+        )
+        db_session.commit()
+        
+        assert msg2.reply_to.id == msg1.id
+        assert msg2.reply_to.content == "Original"
+        
+        assert len(msg1.replies) == 1
+        assert msg1.replies[0].id == msg2.id
+        
+        db_session.rollback()
+
+class TestMessageRepositoryImages:
+    def test_create_message_with_images(self, db_session):
+        from app.repositories.message_repository import MessageRepository
+        from app.core.database import UserORM, ChatORM
+        import uuid
+        import json
+        
+        user = UserORM(
+            id=str(uuid.uuid4()),
+            email="test@example.com",
+            username="testuser",
+            password_hash="hash",
+            created_at=1234567890
+        )
+        db_session.add(user)
+        
+        chat = ChatORM(
+            id=str(uuid.uuid4()),
+            name="Test Chat",
+            is_group=False,
+            created_by=user.id,
+            created_at=1234567890,
+            updated_at=1234567890
+        )
+        db_session.add(chat)
+        db_session.commit()
+        
+        repo = MessageRepository(db_session)
+        images = ["/uploads/images/1.png", "/uploads/images/2.png"]
+        images_json = json.dumps(images)
+        
+        message = repo.create_message(
+            chat_id=chat.id,
+            sender_id=user.id,
+            content=json.dumps(images),
+            is_image=True,
+            images=images_json
+        )
+        
+        db_session.commit()
+        
+        assert message.is_image is True
+        assert message.images == images_json
+        assert json.loads(message.images) == images
+        
+        db_session.rollback()
+    
+    def test_get_message_with_images_returns_parsed(self, db_session):
+        from app.repositories.message_repository import MessageRepository
+        from app.core.database import UserORM, ChatORM
+        import uuid
+        import json
+        
+        user = UserORM(id=str(uuid.uuid4()), email="test@example.com", username="testuser", password_hash="hash", created_at=1234567890)
+        db_session.add(user)
+        chat = ChatORM(id=str(uuid.uuid4()), name="Test Chat", is_group=False, created_by=user.id, created_at=1234567890, updated_at=1234567890)
+        db_session.add(chat)
+        db_session.commit()
+        
+        repo = MessageRepository(db_session)
+        images = ["/uploads/images/test.png"]
+        message = repo.create_message(
+            chat_id=chat.id,
+            sender_id=user.id,
+            content=json.dumps(images),
+            is_image=True,
+            images=json.dumps(images)
+        )
+        db_session.commit()
+        
+        fetched = db_session.query(MessageORM).filter(MessageORM.id == message.id).first()
+        assert fetched.images is not None
+        assert json.loads(fetched.images) == images
+        
+        db_session.rollback()

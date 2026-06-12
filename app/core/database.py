@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, String, ForeignKey, Column, Integer, Boolean
+from sqlalchemy import create_engine, String, ForeignKey, Column, Integer, Boolean, Text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column, relationship
 import uuid
 import os
@@ -81,6 +81,7 @@ class MessageORM(Base):
     sticker_id: Mapped[str] = mapped_column(String, nullable=True)
     is_sticker: Mapped[bool] = mapped_column(Boolean, default=False)
     is_image: Mapped[bool] = mapped_column(Boolean, default=False)
+    images: Mapped[str] = mapped_column(Text, nullable=True)
     reply_to_id: Mapped[str] = mapped_column(String, ForeignKey("messages.id"), nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -88,7 +89,7 @@ class MessageORM(Base):
     chat: Mapped["ChatORM"] = relationship("ChatORM", back_populates="messages")
     sender: Mapped["UserORM"] = relationship("UserORM", foreign_keys=[sender_id], overlaps="messages")
     reply_to: Mapped["MessageORM"] = relationship("MessageORM", remote_side=[id], foreign_keys=[reply_to_id])
-    replies: Mapped[list["MessageORM"]] = relationship("MessageORM", foreign_keys=[reply_to_id])
+    replies: Mapped[list["MessageORM"]] = relationship("MessageORM", foreign_keys=[reply_to_id], overlaps="reply_to")
 
 class NotificationORM(Base):
     __tablename__ = "notifications"

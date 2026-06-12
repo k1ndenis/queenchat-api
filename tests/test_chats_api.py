@@ -1,4 +1,5 @@
 import pytest
+import json
 from fastapi.testclient import TestClient
 from main import app
 from unittest.mock import patch
@@ -456,6 +457,148 @@ class TestImageMessages:
         for msg in messages:
             if msg["content"] == "/uploads/images/photo.png":
                 assert msg["is_image"] is True
+                found = True
+                break
+        assert found is True
+
+class TestReplyToMessage:
+    def test_send_reply_to_message_success(self, auth_client, db_session):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": True, "name": "Test Group", "participant_ids": []}
+        )
+        if chat_response.status_code != 201:
+            chat_response = auth_client.post(
+                "/api/chats/",
+                json={"is_group": False, "participant_ids": [auth_client.user_id]}
+            )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        msg1_response = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "Original message"}
+        )
+        assert msg1_response.status_code == 200
+        msg1_id = msg1_response.json()["id"]
+        
+        reply_response = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "Reply message", "reply_to_id": msg1_id}
+        )
+        assert reply_response.status_code == 200
+        data = reply_response.json()
+        
+        assert data["reply_to_id"] == msg1_id
+        assert data["content"] == "Reply message"
+    
+    def test_send_reply_to_nonexistent_message(self, auth_client, db_session):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": True, "name": "Test Group 2", "participant_ids": []}
+        )
+        if chat_response.status_code != 201:
+            chat_response = auth_client.post(
+                "/api/chats/",
+                json={"is_group": False, "participant_ids": [auth_client.user_id]}
+            )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        response = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "Reply", "reply_to_id": "nonexistent-id"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["reply_to_id"] == "nonexistent-id"
+    
+    def test_get_message_with_reply_to(self, auth_client, db_session):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": True, "name": "Test Group 3", "participant_ids": []}
+        )
+        if chat_response.status_code != 201:
+            chat_response = auth_client.post(
+                "/api/chats/",
+                json={"is_group": False, "participant_ids": [auth_client.user_id]}
+            )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        msg1 = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "Parent message"}
+        ).json()
+        
+        msg2 = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": "Child message", "reply_to_id": msg1["id"]}
+        ).json()
+        
+        messages_response = auth_client.get(f"/api/chats/{chat_id}/messages")
+        assert messages_response.status_code == 200
+        messages = messages_response.json()
+        
+        found = False
+        for msg in messages:
+            if msg["id"] == msg2["id"]:
+                assert msg["reply_to_id"] == msg1["id"]
+                found = True
+                break
+        assert found is True
+
+class TestImageGallery:
+    def test_send_multiple_images(self, auth_client):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": True, "name": "Test Group", "participant_ids": []}
+        )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        images = [
+            "/uploads/images/img1.png",
+            "/uploads/images/img2.png",
+            "/uploads/images/img3.png"
+        ]
+        
+        print(f"📸 Sending images: {images}")
+        
+        response = auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": json.dumps(images), "is_image": True, "images": images}
+        )
+        
+        print(f"📸 Response: {response.json()}")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_image"] is True
+        assert data["content"] == json.dumps(images)
+    
+    def test_get_messages_with_images(self, auth_client):
+        chat_response = auth_client.post(
+            "/api/chats/",
+            json={"is_group": True, "name": "Test Group 2", "participant_ids": []}
+        )
+        assert chat_response.status_code == 201
+        chat_id = chat_response.json()["id"]
+        
+        images = ["/uploads/images/test1.png", "/uploads/images/test2.png"]
+        
+        auth_client.post(
+            f"/api/chats/{chat_id}/messages",
+            json={"content": json.dumps(images), "is_image": True, "images": images}
+        )
+        
+        messages_response = auth_client.get(f"/api/chats/{chat_id}/messages")
+        assert messages_response.status_code == 200
+        messages = messages_response.json()
+        
+        found = False
+        for msg in messages:
+            if msg.get("content") == json.dumps(images):
                 found = True
                 break
         assert found is True

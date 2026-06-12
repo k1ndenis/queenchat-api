@@ -13,6 +13,7 @@ class MessageService:
         content: str = None,
         sticker_id: str = None,
         is_image: bool = False,
+        images: str = None,
         reply_to_id: str = None
     ):
         is_sticker = sticker_id is not None
@@ -23,6 +24,7 @@ class MessageService:
             sticker_id,
             is_sticker,
             is_image,
+            images,
             reply_to_id
         )
         redis_cache.delete(f"chat_messages:{chat_id}")

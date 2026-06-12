@@ -1,63 +1,61 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from typing import List, Optional
 from sqlalchemy.orm import Session
-from typing import Optional
 from pathlib import Path
 import os
 import uuid
-import traceback
+import json
 
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
-from app.services.file_service import FileService
 
 router = APIRouter()
 
-@router.post("/upload-image/{chat_id}")
-async def upload_image(
-    chat_id: str,
-    file: UploadFile = File(...),
+UPLOAD_DIR = Path("/app/uploads/images")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB per file
+MAX_FILES = 10
+
+@router.post("/upload-images")
+async def upload_images(
+    files: List[UploadFile] = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    try:
-        print(f"📸 === UPLOAD IMAGE ===")
-        print(f"📸 Chat ID: {chat_id}")
-        print(f"📸 User ID: {current_user.id}")
-        print(f"📸 Filename: {file.filename}")
-        print(f"📸 Content-Type: {file.content_type}")
-        
-        # Проверяем файл
-        content = await file.read()
-        print(f"📸 File size: {len(content)} bytes")
-        
-        if not content:
-            raise HTTPException(status_code=400, detail="Empty file")
-        
-        # Сохраняем
+    if len(files) > MAX_FILES:
+        raise HTTPException(status_code=400, detail=f"Maximum {MAX_FILES} files allowed")
+    
+    uploaded_urls = []
+    errors = []
+    
+    for file in files:
         ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            errors.append(f"{file.filename}: unsupported file type")
+            continue
+        
+        file.file.seek(0, 2)
+        size = file.file.tell()
+        file.file.seek(0)
+        if size > MAX_FILE_SIZE:
+            errors.append(f"{file.filename}: file too large (max 10MB)")
+            continue
+        
         new_filename = f"{uuid.uuid4().hex}{ext}"
+        file_path = UPLOAD_DIR / new_filename
         
-        upload_dir = Path("/app/uploads/images")
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        
-        file_path = upload_dir / new_filename
+        content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
         
         file_url = f"/uploads/images/{new_filename}"
-        
-        # TODO: сохранить в БД через FileService
-        
-        return {
-            "success": True,
-            "url": file_url,
-            "filename": new_filename,
-            "size": len(content)
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ Upload error: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        uploaded_urls.append(file_url)
+    
+    return {
+        "success": True,
+        "urls": uploaded_urls,
+        "errors": errors if errors else None,
+        "count": len(uploaded_urls)
+    }

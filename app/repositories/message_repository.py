@@ -15,6 +15,7 @@ class MessageRepository:
         sticker_id: str = None,
         is_sticker: bool = False,
         is_image: bool = False,
+        images: str = None,
         reply_to_id: str = None
     ) -> MessageORM:
         message = MessageORM(
@@ -25,6 +26,7 @@ class MessageRepository:
             sticker_id=sticker_id,
             is_sticker=is_sticker,
             is_image=is_image,
+            images=images,
             reply_to_id=reply_to_id,
             created_at=int(time.time()),
             is_read=False
