@@ -107,3 +107,20 @@ class NotificationRepository:
         self.db.query(NotificationORM).filter(
             NotificationORM.chat_id == chat_id
         ).delete(synchronize_session=False)
+
+    def delete_old_notifications(self, user_id: str, days: int) -> int:
+        cutoff = int(time.time()) - (days * 86400)
+        deleted = self.db.query(NotificationORM).filter(
+            NotificationORM.user_id == user_id,
+            NotificationORM.created_at < cutoff
+        ).delete(synchronize_session=False)
+        self.db.commit()
+        return deleted
+
+    def delete_all_read(self, user_id: str) -> int:
+        deleted = self.db.query(NotificationORM).filter(
+            NotificationORM.user_id == user_id,
+            NotificationORM.is_read == True
+        ).delete(synchronize_session=False)
+        self.db.commit()
+        return deleted

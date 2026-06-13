@@ -8,6 +8,7 @@ from app.api.v1 import chats
 from app.api.v1 import notifications
 from app.api.v1 import files
 from app.core.database import lifespan
+from app.core import firebase
 
 app = FastAPI(
     title="QueenChat API",
@@ -19,7 +20,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://queenchat.ru"],
+    allow_origins=[
+        "https://queenchat.ru",
+        "https://www.queenchat.ru"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

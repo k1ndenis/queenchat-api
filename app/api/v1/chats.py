@@ -2,11 +2,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, H
 from sqlalchemy.orm import Session
 from typing import List
 import json
+import asyncio
+import time
 
 from app.core.websocket import manager, get_current_user_ws
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
-from app.core.database import MessageORM
 from app.services.chat_service import ChatService
 from app.services.message_service import MessageService
 from app.services.notification_service import NotificationService
@@ -14,12 +15,16 @@ from app.models.chat import ChatCreate, ChatResponse, ChatDeleteResponse
 from app.models.message import MessageCreate, MessageResponse
 from app.repositories.auth_repository import AuthRepository
 
+from app.api.v1.notifications import send_fcm_notification
+
 router = APIRouter()
+
 
 def validate_chat_id(chat_id: str):
     if not chat_id or chat_id == "undefined" or chat_id == "null":
         raise HTTPException(status_code=400, detail="Invalid chat ID")
     return chat_id
+
 
 @router.websocket("/ws/global")
 async def global_websocket_endpoint(
@@ -36,6 +41,7 @@ async def global_websocket_endpoint(
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect_global(user.id)
+
 
 @router.websocket("/ws/{chat_id}")
 async def websocket_endpoint(
@@ -86,6 +92,7 @@ async def websocket_endpoint(
             chat_id=chat_id
         )
 
+
 @router.get("/{chat_id}", response_model=ChatResponse)
 def get_chat(
     chat_id: str,
@@ -105,6 +112,7 @@ def get_chat(
             db.rollback()
     return chat
 
+
 @router.delete("/{chat_id}", response_model=ChatDeleteResponse)
 def delete_chat(
     chat_id: str,
@@ -120,6 +128,7 @@ def delete_chat(
         raise HTTPException(status_code=403, detail="Not a participant")
     service.delete_chat(chat_id)
     return ChatDeleteResponse(id=chat_id)
+
 
 @router.post("/", response_model=ChatResponse, status_code=201)
 def create_chat(
@@ -171,6 +180,7 @@ def create_chat(
         print(f"❌ Error creating chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/", response_model=List[ChatResponse])
 def get_user_chats(
     current_user: User = Depends(get_current_user),
@@ -179,6 +189,7 @@ def get_user_chats(
     service = ChatService(db)
     chats = service.get_user_chats(current_user.id)
     return chats
+
 
 @router.post("/{chat_id}/messages", response_model=MessageResponse)
 async def send_message(
@@ -200,8 +211,6 @@ async def send_message(
             chat_service.add_participant(chat_id, current_user.id)
             db.flush()
         
-        images_json = json.dumps(message_data.images) if message_data.images else None
-
         message = message_service.create_message(
             chat_id=chat_id,
             sender_id=current_user.id,
@@ -220,6 +229,8 @@ async def send_message(
         print(f"🔔 [NOTIFICATION] Chat ID: {chat_id}")
         print(f"🔔 [NOTIFICATION] Current user: {current_user.id}")
         
+        push_recipients = []
+        
         try:
             notification_service = NotificationService(db)
             chat = chat_service.get_chat(chat_id)
@@ -237,6 +248,7 @@ async def send_message(
                             type="message"
                         )
                         print(f"✅ [NOTIFICATION] Created for {participant.user_id}")
+                        push_recipients.append(participant.user_id)
                     else:
                         print(f"🔔 [NOTIFICATION] Skipping sender {participant.user_id}")
             else:
@@ -246,6 +258,22 @@ async def send_message(
             print(f"❌ [NOTIFICATION] Exception: {notif_error}")
             import traceback
             traceback.print_exc()
+        
+        print(f"🔔 [PUSH CHECK] push_recipients={push_recipients}")
+        
+        if push_recipients:
+            push_body = message.content[:100] + ("..." if len(message.content) > 100 else "")
+            if message.is_image:
+                push_body = "📷 Изображение"
+            
+            for recipient_id in push_recipients:
+                print(f"📨 [PUSH] Sending FCM to {recipient_id}")
+                await send_fcm_notification(
+                    user_id=recipient_id,
+                    title=f"Новое сообщение от {current_user.username}",
+                    body=push_body,
+                    url=f"/chat/{chat_id}"
+                )
         
         print("=" * 60)
         
@@ -260,7 +288,9 @@ async def send_message(
                     "created_at": message.created_at,
                     "chat_id": chat_id,
                     "is_sticker": getattr(message, 'is_sticker', False),
-                    "is_read": message.is_read
+                    "is_read": message.is_read,
+                    "is_image": message.is_image,
+                    "images": message_data.images if message_data.images else None
                 }
             },
             chat_id=chat_id,
@@ -275,6 +305,7 @@ async def send_message(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/{chat_id}/messages", response_model=List[MessageResponse])
 def get_messages(
@@ -299,6 +330,7 @@ def get_messages(
     messages = message_service.get_chat_messages(chat_id, limit=limit, offset=offset)
     return messages
 
+
 @router.patch("/{chat_id}/messages/{message_id}/read")
 def mark_message_as_read(
     chat_id: str,
@@ -314,7 +346,6 @@ def mark_message_as_read(
         
         if message:
             db.commit()
-            import asyncio
             asyncio.create_task(
                 manager.broadcast_to_chat(
                     {
@@ -334,6 +365,7 @@ def mark_message_as_read(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/{chat_id}/participants/{user_id}")
 def add_participant(
@@ -364,6 +396,7 @@ def add_participant(
     db.commit()
     return {"message": "Participant added successfully"}
 
+
 @router.delete("/{chat_id}/participants/{user_id}")
 def remove_participant(
     chat_id: str,
@@ -379,6 +412,7 @@ def remove_participant(
     service.remove_participant(chat_id, user_id)
     db.commit()
     return {"message": "Participant removed successfully"}
+
 
 @router.get("/{chat_id}/last-message")
 def get_last_message(
@@ -412,6 +446,7 @@ def get_last_message(
         print(f"❌ Error getting last message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/{chat_id}/messages/unread/count")
 def get_unread_messages_count(
     chat_id: str,
@@ -429,6 +464,7 @@ def get_unread_messages_count(
     count = message_service.get_unread_count(chat_id, current_user.id)
     
     return {"count": count}
+
 
 @router.post("/{chat_id}/messages/read/all")
 async def mark_all_messages_as_read(

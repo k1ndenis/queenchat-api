@@ -10,6 +10,12 @@ os.environ["DB_NAME"] = "test"
 os.environ["DB_USER"] = "test"
 os.environ["DB_PASSWORD"] = "test"
 
+sys.modules['firebase_admin'] = MagicMock()
+sys.modules['firebase_admin.credentials'] = MagicMock()
+sys.modules['firebase_admin.messaging'] = MagicMock()
+
+sys.modules['app.core.firebase'] = MagicMock()
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest

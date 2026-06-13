@@ -48,3 +48,9 @@ class NotificationService:
     
     def mark_all_as_read(self, user_id: str):
         return self.repo.mark_all_as_read(user_id)
+
+    def delete_old_notifications(self, user_id: str, days: int) -> int:
+        return self.repo.delete_old_notifications(user_id, days)
+
+    def delete_all_read(self, user_id: str) -> int:
+        return self.repo.delete_all_read(user_id)

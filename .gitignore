@@ -52,3 +52,5 @@ logs/
 
 # Alembic migrations (если будешь использовать)
 alembic/versions/*.pyc
+
+firebase-service-account.json
