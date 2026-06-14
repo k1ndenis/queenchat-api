@@ -4,7 +4,12 @@ from typing import List, Optional
 class ChatCreate(BaseModel):
     name: Optional[str] = None
     is_group: bool = False
+    chat_type: str = "private"
     participant_ids: List[str]
+
+class GroupChatCreate(BaseModel):
+    name: str
+    participant_ids: Optional[List[str]] = []
 
 class ParticipantResponse(BaseModel):
     user_id: str
@@ -15,6 +20,8 @@ class ParticipantResponse(BaseModel):
 class ChatResponse(BaseModel):
     id: str
     name: Optional[str] = None
+    avatar: Optional[str] = None
+    chat_type: str = "private"
     is_group: bool
     created_by: str
     created_at: int
@@ -24,3 +31,7 @@ class ChatResponse(BaseModel):
 class ChatDeleteResponse(BaseModel):
     id: str
     message: str = "Chat deleted successfully"
+
+class ChatUpdate(BaseModel):
+    name: Optional[str] = None
+    avatar: Optional[str] = None

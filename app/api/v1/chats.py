@@ -11,7 +11,7 @@ from app.core.database import UserORM as User
 from app.services.chat_service import ChatService
 from app.services.message_service import MessageService
 from app.services.notification_service import NotificationService
-from app.models.chat import ChatCreate, ChatResponse, ChatDeleteResponse
+from app.models.chat import ChatCreate, ChatResponse, ChatDeleteResponse, GroupChatCreate, ChatUpdate
 from app.models.message import MessageCreate, MessageResponse
 from app.repositories.auth_repository import AuthRepository
 
@@ -110,6 +110,7 @@ def get_chat(
             db.commit()
         except Exception:
             db.rollback()
+    
     return chat
 
 
@@ -130,55 +131,146 @@ def delete_chat(
     return ChatDeleteResponse(id=chat_id)
 
 
+@router.post("/private", response_model=ChatResponse, status_code=201)
+def create_private_chat(
+    username: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> ChatResponse:
+    """Создать приватный чат (1-1)"""
+    service = ChatService(db)
+    
+    if username == current_user.username:
+        raise HTTPException(status_code=400, detail="Cannot create chat with yourself")
+    
+    auth_repo = AuthRepository(db)
+    other_user = auth_repo.get_by_username(username)
+    if not other_user:
+        raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+    
+    existing = service.repo.get_existing_private_chat(current_user.id, other_user.id)
+    if existing:
+        return service.get_chat(existing.id)
+    
+    chat = service.create_chat(
+        name=None,
+        is_group=False,
+        created_by=current_user.id,
+        participant_ids=[current_user.id, other_user.id],
+        chat_type="private"
+    )
+    
+    db.commit()
+    return chat
+
+
+@router.post("/group", response_model=ChatResponse, status_code=201)
+def create_group_chat(
+    group_data: GroupChatCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> ChatResponse:
+    """Создать групповой чат (беседу)"""
+    service = ChatService(db)
+    
+    if not group_data.name or len(group_data.name.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Group name is required")
+    
+    if len(group_data.participant_ids) < 2:
+        raise HTTPException(status_code=400, detail="Group chat must have at least 2 participants")
+    
+    auth_repo = AuthRepository(db)
+    participant_ids = [current_user.id]
+    
+    for username in group_data.participant_ids:
+        if username == current_user.username:
+            continue
+        user = auth_repo.get_by_username(username)
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+        participant_ids.append(user.id)
+    
+    participant_ids = list(set(participant_ids))
+    
+    if len(participant_ids) < 2:
+        raise HTTPException(status_code=400, detail="Group chat must have at least 2 participants")
+    
+    chat = service.create_chat(
+        name=group_data.name,
+        is_group=True,
+        created_by=current_user.id,
+        participant_ids=participant_ids,
+        chat_type="group"
+    )
+    
+    db.commit()
+    return chat
+
+
+@router.post("/channel", response_model=ChatResponse, status_code=201)
+def create_channel(
+    channel_data: GroupChatCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> ChatResponse:
+    service = ChatService(db)
+    
+    if not channel_data.name or len(channel_data.name.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Channel name is required")
+    
+    auth_repo = AuthRepository(db)
+    participant_ids = [current_user.id]
+    
+    for username in channel_data.participant_ids:
+        if username == current_user.username:
+            continue
+        user = auth_repo.get_by_username(username)
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+        participant_ids.append(user.id)
+    
+    participant_ids = list(set(participant_ids))
+    
+    chat = service.create_chat(
+        name=channel_data.name,
+        is_group=False,
+        created_by=current_user.id,
+        participant_ids=participant_ids,
+        chat_type="channel"
+    )
+    
+    db.commit()
+    return chat
+
+
 @router.post("/", response_model=ChatResponse, status_code=201)
 def create_chat(
     chat_data: ChatCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> ChatResponse:
-    service = ChatService(db)
-    try:
-        if chat_data.is_group:
-            all_participants = list(set(chat_data.participant_ids + [current_user.id]))
-            chat = service.create_chat(
-                name=chat_data.name,
-                is_group=True,
-                created_by=current_user.id,
-                participant_ids=all_participants
-            )
-        else:
-            if not chat_data.participant_ids or len(chat_data.participant_ids) == 0:
-                raise HTTPException(status_code=400, detail="Username required")
-            
-            other_username = chat_data.participant_ids[0]
-            if not other_username:
-                raise HTTPException(status_code=400, detail="Username required")
-            
-            auth_repo = AuthRepository(db)
-            other_user = auth_repo.get_by_username(other_username)
-            if not other_user:
-                raise HTTPException(status_code=404, detail=f"User '{other_username}' not found")
-            
-            existing = service.repo.get_existing_private_chat(current_user.id, other_user.id)
-            if existing:
-                return service.get_chat(existing.id)
-            
-            chat = service.create_chat(
-                name=None,
-                is_group=False,
-                created_by=current_user.id,
-                participant_ids=[current_user.id, other_user.id]
-            )
-        
-        db.commit()
-        return chat
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Error creating chat: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    if chat_data.chat_type == "group" or chat_data.is_group:
+        return create_group_chat(
+            GroupChatCreate(
+                name=chat_data.name or "Group Chat",
+                participant_ids=chat_data.participant_ids
+            ),
+            current_user,
+            db
+        )
+    elif chat_data.chat_type == "channel":
+        return create_channel(
+            GroupChatCreate(
+                name=chat_data.name or "Channel",
+                participant_ids=chat_data.participant_ids
+            ),
+            current_user,
+            db
+        )
+    else:
+        if not chat_data.participant_ids or len(chat_data.participant_ids) == 0:
+            raise HTTPException(status_code=400, detail="Username required")
+        return create_private_chat(chat_data.participant_ids[0], current_user, db)
 
 
 @router.get("/", response_model=List[ChatResponse])
@@ -210,6 +302,12 @@ async def send_message(
             print(f"⚠️ User {current_user.id} not in participants, adding...")
             chat_service.add_participant(chat_id, current_user.id)
             db.flush()
+        
+        chat = chat_service.get_chat(chat_id)
+        
+        if chat and chat.chat_type == "channel":
+            if chat.created_by != current_user.id and current_user.username != "admin":
+                raise HTTPException(status_code=403, detail="Only channel creator can post messages")
         
         message = message_service.create_message(
             chat_id=chat_id,
@@ -374,24 +472,30 @@ def add_participant(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    chat_id = validate_chat_id(chat_id)
     service = ChatService(db)
     chat = service.get_chat(chat_id)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
-    if not chat.is_group:
-        if service.is_participant(chat_id, user_id):
-            return {"message": "Participant already in chat"}
-        service.add_participant(chat_id, user_id)
-        db.commit()
-        return {"message": "Participant added successfully"}
+    if chat.chat_type == "private":
+        raise HTTPException(status_code=400, detail="Cannot add participants to private chat")
     
-    if chat.created_by != current_user.id:
-        raise HTTPException(status_code=403, detail="Only chat creator can add participants")
+    if chat.chat_type == "channel":
+        # В канал может добавлять только создатель
+        if chat.created_by != current_user.id:
+            raise HTTPException(status_code=403, detail="Only channel creator can add subscribers")
+    else:
+        # В группу может добавлять только создатель
+        if chat.created_by != current_user.id:
+            raise HTTPException(status_code=403, detail="Only chat creator can add participants")
+    
+    user = service.auth_repo.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
     
     if service.is_participant(chat_id, user_id):
         return {"message": "Participant already in chat"}
+    
     service.add_participant(chat_id, user_id)
     db.commit()
     return {"message": "Participant added successfully"}
@@ -404,14 +508,78 @@ def remove_participant(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    chat_id = validate_chat_id(chat_id)
     service = ChatService(db)
     chat = service.get_chat(chat_id)
-    if not chat or chat.created_by != current_user.id:
-        raise HTTPException(status_code=403, detail="Only chat creator can remove participants")
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    if chat.chat_type == "private":
+        raise HTTPException(status_code=400, detail="Cannot remove participants from private chat")
+    
+    if chat.chat_type == "channel":
+        # Из канала нельзя удалить создателя
+        if user_id == chat.created_by:
+            raise HTTPException(status_code=400, detail="Cannot remove channel creator")
+        # Удалить может только создатель
+        if chat.created_by != current_user.id and user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Only channel creator can remove subscribers")
+    else:
+        if chat.created_by != current_user.id and user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Only chat creator or the user themselves can leave")
+    
+    if not service.is_participant(chat_id, user_id):
+        raise HTTPException(status_code=404, detail="User not in chat")
+    
     service.remove_participant(chat_id, user_id)
     db.commit()
     return {"message": "Participant removed successfully"}
+
+
+@router.post("/{chat_id}/subscribe")
+def subscribe_to_channel(
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = ChatService(db)
+    chat = service.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    
+    if chat.chat_type != "channel":
+        raise HTTPException(status_code=400, detail="Not a channel")
+    
+    if service.is_participant(chat_id, current_user.id):
+        return {"message": "Already subscribed"}
+    
+    service.add_participant(chat_id, current_user.id)
+    db.commit()
+    return {"message": "Subscribed successfully"}
+
+
+@router.post("/{chat_id}/unsubscribe")
+def unsubscribe_from_channel(
+    chat_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = ChatService(db)
+    chat = service.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    
+    if chat.chat_type != "channel":
+        raise HTTPException(status_code=400, detail="Not a channel")
+    
+    if not service.is_participant(chat_id, current_user.id):
+        return {"message": "Not subscribed"}
+    
+    if chat.created_by == current_user.id:
+        raise HTTPException(status_code=400, detail="Channel creator cannot unsubscribe")
+    
+    service.remove_participant(chat_id, current_user.id)
+    db.commit()
+    return {"message": "Unsubscribed successfully"}
 
 
 @router.get("/{chat_id}/last-message")
@@ -491,3 +659,36 @@ async def mark_all_messages_as_read(
     db.commit()
     
     return {"status": "ok", "marked_count": count}
+
+@router.patch("/{chat_id}", response_model=ChatResponse)
+def update_chat(
+    chat_id: str,
+    chat_update: ChatUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> ChatResponse:
+    chat_id = validate_chat_id(chat_id)
+    service = ChatService(db)
+    
+    chat = service.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    if chat.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Only chat creator can update chat info")
+    
+    if chat.chat_type not in ["group", "channel"]:
+        raise HTTPException(status_code=400, detail="Only groups and channels can be updated")
+    
+    updated_chat = service.update_chat(
+        chat_id=chat_id,
+        name=chat_update.name,
+        avatar=chat_update.avatar
+    )
+    
+    if not updated_chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    db.commit()
+    
+    return updated_chat

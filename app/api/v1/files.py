@@ -96,3 +96,30 @@ async def upload_avatar(
     db.commit()
     
     return {"success": True, "url": avatar_url}
+
+@router.post("/upload-chat-avatar")
+async def upload_chat_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    file.file.seek(0, 2)
+    size = file.file.tell()
+    file.file.seek(0)
+    if size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    new_filename = f"chat_avatar_{uuid.uuid4().hex}{ext}"
+    file_path = UPLOAD_DIR / new_filename
+    
+    content = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    avatar_url = f"/uploads/images/{new_filename}"
+    
+    return {"success": True, "url": avatar_url}

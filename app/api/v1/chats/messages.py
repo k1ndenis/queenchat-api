@@ -27,6 +27,16 @@ async def send_message(
         message_service = MessageService(db)
         chat_service = ChatService(db)
         
+        # Получаем чат для проверки типа
+        chat = chat_service.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        # Проверка прав для канала (писать может только создатель)
+        if chat.chat_type == "channel":
+            if chat.created_by != current_user.id and current_user.username != "admin":
+                raise HTTPException(status_code=403, detail="Only channel creator can post messages")
+        
         if not chat_service.is_participant(chat_id, current_user.id):
             print(f"⚠️ User {current_user.id} not in participants, adding...")
             chat_service.add_participant(chat_id, current_user.id)
@@ -58,7 +68,6 @@ async def send_message(
             notification_service = NotificationService(db)
             print("🔔 [NOTIFICATION] NotificationService created")
             
-            chat = chat_service.get_chat(chat_id)
             print(f"🔔 [NOTIFICATION] Chat found: {chat is not None}")
             
             if chat:
@@ -126,6 +135,8 @@ async def send_message(
             is_read=message.is_read
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         print(f"❌ Error sending message: {e}")
@@ -225,6 +236,7 @@ def mark_message_as_read(
         db.rollback()
         print(f"❌ Error marking message as read: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/{chat_id}/messages/read/all")
 def mark_all_messages_as_read(

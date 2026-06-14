@@ -31,6 +31,8 @@ class ChatService:
             result.append(ChatResponse(
                 id=chat.id,
                 name=chat.name,
+                avatar=chat.avatar if hasattr(chat, 'avatar') else None,
+                chat_type=getattr(chat, 'chat_type', 'private'),
                 is_group=chat.is_group,
                 created_by=chat.created_by,
                 created_at=chat.created_at,
@@ -42,27 +44,24 @@ class ChatService:
         return result
 
     def get_chat(self, chat_id: str) -> ChatResponse | None:
-        cache_key = f"chat:{chat_id}"
-        cached = redis_cache.get(cache_key)
-        if cached:
-            return ChatResponse(**cached)
-        
         chat = self.repo.get_chat(chat_id)
         if not chat:
             return None
         
         participants = []
-        for user in chat.participants:
-            participants.append({
-                "user_id": user.id,
-                "username": user.username,
-                "avatar": user.avatar,
-                "joined_at": chat.created_at
-            })
+        for participant in chat.participants:
+            participants.append(ParticipantResponse(
+                user_id=participant.id,
+                username=participant.username,
+                avatar=participant.avatar if hasattr(participant, 'avatar') else None,
+                joined_at=chat.created_at
+            ))
         
         result = ChatResponse(
             id=chat.id,
             name=chat.name,
+            avatar=chat.avatar if hasattr(chat, 'avatar') else None,
+            chat_type=getattr(chat, 'chat_type', 'private'),
             is_group=chat.is_group,
             created_by=chat.created_by,
             created_at=chat.created_at,
@@ -70,12 +69,14 @@ class ChatService:
             participants=participants
         )
         
-        redis_cache.set(cache_key, result.model_dump())
         return result
 
-    def create_chat(self, name: str, is_group: bool, created_by: str, participant_ids: list[str]):
-        chat = self.repo.create_chat(name, is_group, created_by)
+    def create_chat(self, name: str, is_group: bool, created_by: str, participant_ids: list[str], chat_type: str = None):
+        if chat_type is None:
+            chat_type = "group" if is_group else "private"
         
+        chat = self.repo.create_chat(name, is_group, created_by, chat_type)
+            
         all_participants = list(set(participant_ids + [created_by]))
         for user_id in all_participants:
             self.repo.add_participant(chat.id, user_id)
@@ -89,12 +90,14 @@ class ChatService:
             participants.append({
                 "user_id": user_id,
                 "username": user.username,
+                "avatar": user.avatar if hasattr(user, 'avatar') else None,
                 "joined_at": int(time.time())
             })
         
         return ChatResponse(
             id=chat.id,
             name=chat.name,
+            chat_type=chat_type,
             is_group=chat.is_group,
             created_by=chat.created_by,
             created_at=chat.created_at,
@@ -130,8 +133,46 @@ class ChatService:
         redis_cache.delete(f"chat:{chat_id}")
         return result
 
-    def remove_participant(self, chat_id: str, user_id: str):
+    def remove_participant(self, chat_id: str, user_id: str) -> bool:
         result = self.repo.remove_participant(chat_id, user_id)
-        redis_cache.delete(f"user_chats:{user_id}")
-        redis_cache.delete(f"chat:{chat_id}")
+        
+        if result:
+            redis_cache.delete(f"user_chats:{user_id}")
+            redis_cache.delete(f"chat:{chat_id}")
+            
+            chat = self.get_chat(chat_id)
+            if chat and hasattr(chat, 'created_by'):
+                redis_cache.delete(f"user_chats:{chat.created_by}")
+        
         return result
+    
+    def update_chat(self, chat_id: str, name: str = None, avatar: str = None) -> ChatResponse | None:
+        chat = self.repo.update_chat(chat_id, name=name, avatar=avatar)
+        if not chat:
+            return None
+        
+        for participant in chat.participants:
+            redis_cache.delete(f"user_chats:{participant.id}")
+        
+        redis_cache.delete(f"chat:{chat_id}")
+        
+        participants = []
+        for participant in chat.participants:
+            participants.append(ParticipantResponse(
+                user_id=participant.id,
+                username=participant.username,
+                avatar=participant.avatar if hasattr(participant, 'avatar') else None,
+                joined_at=chat.created_at
+            ))
+        
+        return ChatResponse(
+            id=chat.id,
+            name=chat.name,
+            avatar=chat.avatar if hasattr(chat, 'avatar') else None,  # Добавляем avatar в ответ
+            chat_type=getattr(chat, 'chat_type', 'private'),
+            is_group=chat.is_group,
+            created_by=chat.created_by,
+            created_at=chat.created_at,
+            updated_at=chat.updated_at,
+            participants=participants
+        )

@@ -50,7 +50,9 @@ class ChatORM(Base):
     __tablename__ = "chats"
 
     name: Mapped[str] = mapped_column(String, unique=False, nullable=True)
+    avatar = Column(Text, nullable=True)
     is_group: Mapped[bool] = mapped_column(default=False)
+    chat_type: Mapped[str] = mapped_column(String, default="private")
     created_by: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[int] = mapped_column(default=lambda: int(time.time()))
     updated_at: Mapped[int] = mapped_column(default=lambda: int(time.time()), onupdate=lambda: int(time.time()))
@@ -152,6 +154,17 @@ async def cleanup_old_notifications():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    
+    # Добавить колонку chat_type если её нет (миграция)
+    if not TESTING:
+        try:
+            with engine.connect() as conn:
+                conn.execute(Text("ALTER TABLE chats ADD COLUMN chat_type VARCHAR(20) DEFAULT 'private'"))
+                conn.commit()
+                print("✅ Added chat_type column to chats table")
+        except Exception as e:
+            # Колонка уже существует
+            pass
     
     if not TESTING:
         try:

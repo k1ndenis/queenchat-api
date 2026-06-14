@@ -23,11 +23,12 @@ class ChatRepository:
             ChatORM.is_group == False
         ).first()
 
-    def create_chat(self, name: str, is_group: bool, created_by: str) -> ChatORM:
+    def create_chat(self, name: str, is_group: bool, created_by: str, chat_type: str) -> ChatORM:
         chat = ChatORM(
             id=str(uuid.uuid4()),
             name=name,
             is_group=is_group,
+            chat_type=chat_type,
             created_by=created_by,
             created_at=int(time.time()),
             updated_at=int(time.time())
@@ -93,3 +94,38 @@ class ChatRepository:
 
     def get_chat(self, chat_id: str) -> ChatORM | None:
         return self.db.query(ChatORM).filter(ChatORM.id == chat_id).first()
+
+    def update_chat(self, chat_id: str, name: str = None, avatar: str = None) -> ChatORM | None:
+        chat = self.get_chat(chat_id)
+        if not chat:
+            return None
+        
+        if name is not None:
+            chat.name = name
+        if avatar is not None:
+            chat.avatar = avatar
+        
+        chat.updated_at = int(time.time())
+        self.db.add(chat)
+        self.db.flush()
+        return chat
+
+    def remove_participant(self, chat_id: str, user_id: str) -> bool:
+        try:
+            participant = self.db.query(ChatParticipantORM).filter(
+                ChatParticipantORM.chat_id == chat_id,
+                ChatParticipantORM.user_id == user_id
+            ).first()
+            
+            if not participant:
+                print(f"❌ Participant {user_id} not found in chat {chat_id}")
+                return False
+            
+            self.db.delete(participant)
+            self.db.flush()
+            print(f"✅ Participant {user_id} removed from chat {chat_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Error removing participant: {e}")
+            self.db.rollback()
+            return False
