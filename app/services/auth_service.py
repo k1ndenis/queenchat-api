@@ -3,7 +3,6 @@ from fastapi import HTTPException
 from app.repositories.auth_repository import AuthRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.message_repository import MessageRepository
-from app.repositories.notification_repository import NotificationRepository
 from app.models.user import UserSchema
 from app.models.auth import TokenResponse, RegisterRequest, LoginRequest
 from app.core.security import hash_password, create_token, verify_password

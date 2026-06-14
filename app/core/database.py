@@ -28,8 +28,10 @@ else:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 class Base(DeclarativeBase):
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
+
 
 class UserORM(Base):
     __tablename__ = "users"
@@ -45,6 +47,7 @@ class UserORM(Base):
         back_populates="participants"
     )
     messages: Mapped[list["MessageORM"]] = relationship("MessageORM", foreign_keys="[MessageORM.sender_id]")
+
 
 class ChatORM(Base):
     __tablename__ = "chats"
@@ -67,12 +70,14 @@ class ChatORM(Base):
         cascade="all, delete-orphan"
     )
 
+
 class ChatParticipantORM(Base):
     __tablename__ = "chat_participants"
     
     chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     joined_at: Mapped[int] = mapped_column(default=lambda: int(time.time()))
+
 
 class MessageORM(Base):
     __tablename__ = "messages"
@@ -94,19 +99,6 @@ class MessageORM(Base):
     reply_to: Mapped["MessageORM"] = relationship("MessageORM", remote_side=[id], foreign_keys=[reply_to_id])
     replies: Mapped[list["MessageORM"]] = relationship("MessageORM", foreign_keys=[reply_to_id], overlaps="reply_to")
 
-class NotificationORM(Base):
-    __tablename__ = "notifications"
-    
-    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
-    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id"), nullable=True)
-    title: Mapped[str] = mapped_column(String, nullable=False)
-    message: Mapped[str] = mapped_column(String, nullable=False)
-    type: Mapped[str] = mapped_column(String, default="info")
-    is_read: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[int] = mapped_column(default=lambda: int(time.time()))
-    
-    user: Mapped["UserORM"] = relationship("UserORM", foreign_keys=[user_id])
 
 class FileORM(Base):
     __tablename__ = "files"
@@ -124,38 +116,15 @@ class FileORM(Base):
     user = relationship("UserORM", back_populates="files")
     chat = relationship("ChatORM", back_populates="files")
 
-UserORM.files = relationship("FileORM", back_populates="user", cascade="all, delete-orphan")
 
+UserORM.files = relationship("FileORM", back_populates="user", cascade="all, delete-orphan")
 ChatORM.files = relationship("FileORM", back_populates="chat", cascade="all, delete-orphan")
 
-async def cleanup_old_notifications():
-    while True:
-        try:
-            await asyncio.sleep(86400)
-            
-            db = SessionLocal()
-            try:
-                cutoff_time = int(time.time()) - (30 * 86400)
-                deleted = db.query(NotificationORM).filter(
-                    NotificationORM.created_at < cutoff_time
-                ).delete()
-                db.commit()
-                
-                if deleted > 0:
-                    print(f"✅ Cleaned {deleted} old notifications")
-            except Exception as e:
-                print(f"❌ Cleanup error: {e}")
-                db.rollback()
-            finally:
-                db.close()
-        except Exception as e:
-            print(f"❌ Cleanup task error: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     
-    # Добавить колонку chat_type если её нет (миграция)
     if not TESTING:
         try:
             with engine.connect() as conn:
@@ -163,7 +132,16 @@ async def lifespan(app: FastAPI):
                 conn.commit()
                 print("✅ Added chat_type column to chats table")
         except Exception as e:
-            # Колонка уже существует
+            # Column already exists
+            pass
+    
+    if not TESTING:
+        try:
+            with engine.connect() as conn:
+                conn.execute(Text("ALTER TABLE chats ADD COLUMN avatar TEXT"))
+                conn.commit()
+                print("✅ Added avatar column to chats table")
+        except Exception as e:
             pass
     
     if not TESTING:
@@ -173,20 +151,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"❌ Redis connection failed: {e}")
     
-    if not TESTING:
-        cleanup_task = asyncio.create_task(cleanup_old_notifications())
-        print("✅ Notification cleanup task started (runs every 24 hours)")
-    else:
-        cleanup_task = None
-    
     yield
-    
-    if cleanup_task:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
     
     if not TESTING:
         redis_client.close()

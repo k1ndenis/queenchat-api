@@ -39,11 +39,6 @@ class ChatRepository:
 
     def delete_chat(self, chat_id: str) -> bool:
         try:
-            from app.core.database import NotificationORM
-            self.db.query(NotificationORM).filter(
-                NotificationORM.chat_id == chat_id
-            ).delete(synchronize_session=False)
-            
             self.db.query(ChatParticipantORM).filter(
                 ChatParticipantORM.chat_id == chat_id
             ).delete(synchronize_session=False)

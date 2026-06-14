@@ -10,7 +10,6 @@ from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
 from app.services.chat_service import ChatService
 from app.services.message_service import MessageService
-from app.services.notification_service import NotificationService
 from app.models.chat import ChatCreate, ChatResponse, ChatDeleteResponse, GroupChatCreate, ChatUpdate
 from app.models.message import MessageCreate, MessageResponse
 from app.repositories.auth_repository import AuthRepository
@@ -137,7 +136,7 @@ def create_private_chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> ChatResponse:
-    """Создать приватный чат (1-1)"""
+    """Create private 1-on-1 chat"""
     service = ChatService(db)
     
     if username == current_user.username:
@@ -170,7 +169,7 @@ def create_group_chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> ChatResponse:
-    """Создать групповой чат (беседу)"""
+    """Create group chat"""
     service = ChatService(db)
     
     if not group_data.name or len(group_data.name.strip()) == 0:
@@ -213,23 +212,14 @@ def create_channel(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> ChatResponse:
+    """Create channel (creator only, subscribers join themselves)"""
     service = ChatService(db)
     
     if not channel_data.name or len(channel_data.name.strip()) == 0:
         raise HTTPException(status_code=400, detail="Channel name is required")
     
-    auth_repo = AuthRepository(db)
+    # Channel starts with only creator
     participant_ids = [current_user.id]
-    
-    for username in channel_data.participant_ids:
-        if username == current_user.username:
-            continue
-        user = auth_repo.get_by_username(username)
-        if not user:
-            raise HTTPException(status_code=404, detail=f"User '{username}' not found")
-        participant_ids.append(user.id)
-    
-    participant_ids = list(set(participant_ids))
     
     chat = service.create_chat(
         name=channel_data.name,
@@ -262,7 +252,7 @@ def create_chat(
         return create_channel(
             GroupChatCreate(
                 name=chat_data.name or "Channel",
-                participant_ids=chat_data.participant_ids
+                participant_ids=[]
             ),
             current_user,
             db
@@ -305,6 +295,7 @@ async def send_message(
         
         chat = chat_service.get_chat(chat_id)
         
+        # Channel permission: only creator can send messages
         if chat and chat.chat_type == "channel":
             if chat.created_by != current_user.id and current_user.username != "admin":
                 raise HTTPException(status_code=403, detail="Only channel creator can post messages")
@@ -322,59 +313,35 @@ async def send_message(
         
         print(f"✅ Message {message.id} COMMITTED to DB")
         
-        print("=" * 60)
-        print("🔔 [NOTIFICATION] Starting notification creation")
-        print(f"🔔 [NOTIFICATION] Chat ID: {chat_id}")
-        print(f"🔔 [NOTIFICATION] Current user: {current_user.id}")
-        
+        # Get recipients for FCM push notifications
         push_recipients = []
+        chat = chat_service.get_chat(chat_id)
         
-        try:
-            notification_service = NotificationService(db)
-            chat = chat_service.get_chat(chat_id)
-            
-            if chat:
-                print(f"🔔 [NOTIFICATION] Participants count: {len(chat.participants)}")
-                for participant in chat.participants:
-                    if participant.user_id != current_user.id:
-                        print(f"🔔 [NOTIFICATION] Creating notification for {participant.user_id}")
-                        notification_service.create_notification(
-                            user_id=participant.user_id,
-                            chat_id=chat_id,
-                            title="Новое сообщение",
-                            message=f"{current_user.username}: {message.content[:50]}",
-                            type="message"
-                        )
-                        print(f"✅ [NOTIFICATION] Created for {participant.user_id}")
-                        push_recipients.append(participant.user_id)
-                    else:
-                        print(f"🔔 [NOTIFICATION] Skipping sender {participant.user_id}")
-            else:
-                print(f"❌ [NOTIFICATION] Chat not found!")
-                
-        except Exception as notif_error:
-            print(f"❌ [NOTIFICATION] Exception: {notif_error}")
-            import traceback
-            traceback.print_exc()
+        if chat:
+            for participant in chat.participants:
+                if participant.user_id != current_user.id:
+                    push_recipients.append(participant.user_id)
         
-        print(f"🔔 [PUSH CHECK] push_recipients={push_recipients}")
+        print(f"🔔 [PUSH] push_recipients={push_recipients}")
         
+        # Send FCM push notifications
         if push_recipients:
             push_body = message.content[:100] + ("..." if len(message.content) > 100 else "")
             if message.is_image:
-                push_body = "📷 Изображение"
+                push_body = "🖼️ Image"
+            if getattr(message, 'is_sticker', False):
+                push_body = "🎨 Sticker"
             
             for recipient_id in push_recipients:
                 print(f"📨 [PUSH] Sending FCM to {recipient_id}")
                 await send_fcm_notification(
                     user_id=recipient_id,
-                    title=f"Новое сообщение от {current_user.username}",
+                    title=f"New message from {current_user.username}",
                     body=push_body,
                     url=f"/chat/{chat_id}"
                 )
         
-        print("=" * 60)
-        
+        # Broadcast via WebSocket to online users
         await manager.broadcast_to_chat(
             {
                 "type": "new_message",
@@ -472,6 +439,7 @@ def add_participant(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Add participant to group chat (creator only)"""
     service = ChatService(db)
     chat = service.get_chat(chat_id)
     if not chat:
@@ -481,13 +449,11 @@ def add_participant(
         raise HTTPException(status_code=400, detail="Cannot add participants to private chat")
     
     if chat.chat_type == "channel":
-        # В канал может добавлять только создатель
-        if chat.created_by != current_user.id:
-            raise HTTPException(status_code=403, detail="Only channel creator can add subscribers")
-    else:
-        # В группу может добавлять только создатель
-        if chat.created_by != current_user.id:
-            raise HTTPException(status_code=403, detail="Only chat creator can add participants")
+        raise HTTPException(status_code=400, detail="Channel subscribers join via /subscribe endpoint")
+    
+    # Groups: only creator can add participants
+    if chat.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Only chat creator can add participants")
     
     user = service.auth_repo.get_by_id(user_id)
     if not user:
@@ -508,6 +474,7 @@ def remove_participant(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Remove participant from group or unsubscribe from channel"""
     service = ChatService(db)
     chat = service.get_chat(chat_id)
     if not chat:
@@ -517,13 +484,14 @@ def remove_participant(
         raise HTTPException(status_code=400, detail="Cannot remove participants from private chat")
     
     if chat.chat_type == "channel":
-        # Из канала нельзя удалить создателя
+        # Cannot remove channel creator
         if user_id == chat.created_by:
             raise HTTPException(status_code=400, detail="Cannot remove channel creator")
-        # Удалить может только создатель
-        if chat.created_by != current_user.id and user_id != current_user.id:
+        # Only creator can remove subscribers
+        if chat.created_by != current_user.id:
             raise HTTPException(status_code=403, detail="Only channel creator can remove subscribers")
     else:
+        # Groups: creator can remove anyone, users can leave themselves
         if chat.created_by != current_user.id and user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Only chat creator or the user themselves can leave")
     
@@ -541,6 +509,7 @@ def subscribe_to_channel(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Subscribe to a channel"""
     service = ChatService(db)
     chat = service.get_chat(chat_id)
     if not chat:
@@ -563,6 +532,7 @@ def unsubscribe_from_channel(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Unsubscribe from a channel"""
     service = ChatService(db)
     chat = service.get_chat(chat_id)
     if not chat:
@@ -574,6 +544,7 @@ def unsubscribe_from_channel(
     if not service.is_participant(chat_id, current_user.id):
         return {"message": "Not subscribed"}
     
+    # Creator cannot unsubscribe from own channel
     if chat.created_by == current_user.id:
         raise HTTPException(status_code=400, detail="Channel creator cannot unsubscribe")
     
@@ -660,6 +631,7 @@ async def mark_all_messages_as_read(
     
     return {"status": "ok", "marked_count": count}
 
+
 @router.patch("/{chat_id}", response_model=ChatResponse)
 def update_chat(
     chat_id: str,
@@ -667,6 +639,7 @@ def update_chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> ChatResponse:
+    """Update chat name or avatar (creator only)"""
     chat_id = validate_chat_id(chat_id)
     service = ChatService(db)
     
