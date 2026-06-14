@@ -36,10 +36,10 @@ class Base(DeclarativeBase):
 class UserORM(Base):
     __tablename__ = "users"
     
-    email: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     username: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
-    avatar: Mapped[str] = mapped_column(String, nullable=True)
+    phone: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    avatar: Mapped[str] = mapped_column(String, nullable=True)
     created_at: Mapped[int] = mapped_column(nullable=False)
 
     chats: Mapped[list["ChatORM"]] = relationship(

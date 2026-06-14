@@ -13,6 +13,9 @@ if TESTING:
         def set(self, *args, **kwargs): 
             return True
         
+        def setex(self, *args, **kwargs):
+            return True
+        
         def get(self, *args, **kwargs): 
             return None
         
@@ -34,6 +37,9 @@ if TESTING:
             self.redis_client = MockRedis()
         
         def set(self, key: str, value: dict, ttl: int = None):
+            return True
+        
+        def setex(self, key: str, time: int, value: str):
             return True
             
         def get(self, key: str) -> dict | None:
@@ -72,12 +78,24 @@ else:
         def set(self, key: str, value: dict, ttl: int = None):
             ttl_value = ttl if ttl is not None else self.ttl_seconds
             return self.redis_client.set(key, json.dumps(value), ex=ttl_value)
+        
+        def setex(self, key: str, time: int, value: str):
+            """Set string value with expiration in seconds"""
+            return self.redis_client.setex(key, time, value)
             
         def get(self, key: str) -> dict | None:
             value = self.redis_client.get(key)
             if value:
-                return json.loads(value)
+                # Пытаемся распарсить как JSON, если не получается - возвращаем как строку
+                try:
+                    return json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    return value if value else None
             return None
+        
+        def get_raw(self, key: str) -> str | None:
+            value = self.redis_client.get(key)
+            return value.decode() if value else None
         
         def delete(self, key: str):
             return self.redis_client.delete(key)

@@ -2,17 +2,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 import json
+import asyncio
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
-from app.core.database import MessageORM
 from app.services.chat_service import ChatService
 from app.services.message_service import MessageService
-from app.services.notification_service import NotificationService
 from app.models.message import MessageCreate, MessageResponse
 from app.core.websocket import manager
 from app.api.v1.chats import validate_chat_id
 
 router = APIRouter()
+
 
 @router.post("/{chat_id}/messages", response_model=MessageResponse)
 async def send_message(
@@ -27,12 +27,12 @@ async def send_message(
         message_service = MessageService(db)
         chat_service = ChatService(db)
         
-        # Получаем чат для проверки типа
+        # Get chat for type check
         chat = chat_service.get_chat(chat_id)
         if not chat:
             raise HTTPException(status_code=404, detail="Chat not found")
         
-        # Проверка прав для канала (писать может только создатель)
+        # Channel permission: only creator can post messages
         if chat.chat_type == "channel":
             if chat.created_by != current_user.id and current_user.username != "admin":
                 raise HTTPException(status_code=403, detail="Only channel creator can post messages")
@@ -57,50 +57,10 @@ async def send_message(
         db.refresh(message)
         
         print(f"✅ Message {message.id} COMMITTED to DB")
-        
-        print("=" * 60)
-        print("🔔 [NOTIFICATION] Starting notification creation")
-        print(f"🔔 [NOTIFICATION] Chat ID: {chat_id}")
-        print(f"🔔 [NOTIFICATION] Current user: {current_user.id}")
-        print(f"🔔 [NOTIFICATION] Current username: {current_user.username}")
-        
-        try:
-            notification_service = NotificationService(db)
-            print("🔔 [NOTIFICATION] NotificationService created")
-            
-            print(f"🔔 [NOTIFICATION] Chat found: {chat is not None}")
-            
-            if chat:
-                print(f"🔔 [NOTIFICATION] Participants count: {len(chat.participants)}")
-                for idx, p in enumerate(chat.participants):
-                    print(f"🔔 [NOTIFICATION] Participant {idx}: user_id={p.user_id}")
-                
-                for participant in chat.participants:
-                    print(f"🔔 [NOTIFICATION] Checking {participant.user_id} vs {current_user.id}")
-                    if participant.user_id != current_user.id:
-                        print(f"🔔 [NOTIFICATION] Creating notification for {participant.user_id}")
-                        notification_service.create_notification(
-                            user_id=participant.user_id,
-                            chat_id=chat_id,
-                            title="Новое сообщение",
-                            message=f"{current_user.username}: {message.content[:50]}",
-                            type="message"
-                        )
-                        print(f"✅ [NOTIFICATION] Notification created for {participant.user_id}")
-                    else:
-                        print(f"🔔 [NOTIFICATION] Skipping sender {participant.user_id}")
-            else:
-                print(f"❌ [NOTIFICATION] Chat {chat_id} not found!")
-                
-        except Exception as notif_error:
-            print(f"❌ [NOTIFICATION] Exception: {notif_error}")
-            import traceback
-            traceback.print_exc()
-        
-        print("=" * 60)
 
         images_list = json.loads(message.images) if message.images else None
         
+        # Broadcast via WebSocket
         await manager.broadcast_to_chat(
             {
                 "type": "new_message",
@@ -214,7 +174,6 @@ def mark_message_as_read(
         if message:
             db.commit()
             
-            import asyncio
             asyncio.create_task(
                 manager.broadcast_to_chat(
                     {
@@ -255,7 +214,6 @@ def mark_all_messages_as_read(
     count = message_service.mark_all_as_read(chat_id, current_user.id)
     db.commit()
     
-    import asyncio
     asyncio.create_task(
         manager.broadcast_to_chat(
             {

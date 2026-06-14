@@ -1,20 +1,26 @@
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 
 from app.services.auth_service import AuthService
+from app.services.captcha_service import captcha_service
 from app.core.dependency import get_db, get_auth_service, get_current_user
 from app.core.database import UserORM as User
 from app.core.security import create_token
-from app.models.auth import RegisterRequest, LoginRequest
 from app.models.user import UserProfile, UpdateProfileRequest
+from app.models.auth import (
+    PhoneRequest,
+    RegisterRequest,
+    LoginRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    VerifyCodeRequest,
+    TokenResponse,
+    SendCodeRequest
+)
 
 router = APIRouter()
 
-class ProfileUpdate(BaseModel):
-    username: str
-    email: str
 
 @router.get("/get_users")
 def get_users(
@@ -22,6 +28,7 @@ def get_users(
     current_user: User = Depends(get_current_user)
 ):
     return auth_service.get_all_users(exclude_current=True, current_user_id=current_user.id)
+
 
 @router.get("/users/{user_id}")
 def get_user_profile(
@@ -39,14 +46,32 @@ def get_user_profile(
     
     return user_profile
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
+
+@router.post("/send-code")
+def send_code(
+    request: SendCodeRequest,
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    # Проверяем капчу
+    if not captcha_service.verify(request.captcha_token):
+        raise HTTPException(status_code=400, detail="Captcha verification failed")
+    
+    return auth_service.send_verification_code(request.phone)
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED, response_model=TokenResponse)
 def register(
     request: RegisterRequest,
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    result = auth_service.register(payload=request)
+    # Проверяем капчу
+    if not captcha_service.verify(request.captcha_token):
+        raise HTTPException(status_code=400, detail="Captcha verification failed")
+    
+    result = auth_service.register(request.phone, request.username, request.password, request.code)
     
     response = JSONResponse(content={
+        "token": result["token"],
         "user": result["user"]
     })
     
@@ -62,14 +87,19 @@ def register(
     
     return response
 
-@router.post("/login")
+
+@router.post("/login", response_model=TokenResponse)
 def login(
     request: LoginRequest,
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    result = auth_service.login(payload=request)
+    if request.captcha_token and not captcha_service.verify(request.captcha_token):
+        raise HTTPException(status_code=400, detail="Captcha verification failed")
+    
+    result = auth_service.login(request.phone, request.password)
     
     response = JSONResponse(content={
+        "token": result["token"],
         "user": result["user"]
     })
     
@@ -84,27 +114,59 @@ def login(
     )
     
     return response
+
+
+@router.post("/forgot-password")
+def forgot_password(
+    request: SendCodeRequest,
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    # Проверяем капчу
+    if not captcha_service.verify(request.captcha_token):
+        raise HTTPException(status_code=400, detail="Captcha verification failed")
+    
+    return auth_service.send_reset_code(request.phone)
+
+
+@router.post("/verify-reset-code")
+def verify_reset_code(
+    request: VerifyCodeRequest,
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    return auth_service.verify_reset_code(request.phone, request.code)
+
+
+@router.post("/reset-password")
+def reset_password(
+    request: ResetPasswordRequest,
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    return auth_service.reset_password(request.phone, request.code, request.new_password)
+
 
 @router.get("/me")
 def get_me(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
         "username": current_user.username,
-        "email": current_user.email,
+        "phone": current_user.phone,
         "avatar": current_user.avatar,
         "created_at": current_user.created_at
     }
+
 
 @router.get("/ws-token")
 def get_ws_token(current_user: User = Depends(get_current_user)):
     token = create_token(current_user.id, current_user.username)
     return {"token": token}
 
+
 @router.post("/logout")
 def logout():
     response = JSONResponse(content={"message": "Logged out successfully"})
     response.delete_cookie("access_token", path="/")
     return response
+
 
 @router.patch("/profile", response_model=UserProfile)
 def update_profile(
@@ -119,15 +181,15 @@ def update_profile(
         if existing:
             raise HTTPException(status_code=400, detail="Username already taken")
     
-    if request.email != current_user.email:
-        existing = service.repository.get_by_email(request.email)
+    if request.phone and request.phone != current_user.phone:
+        existing = service.repository.get_by_phone(request.phone)
         if existing:
-            raise HTTPException(status_code=400, detail="Email already taken")
+            raise HTTPException(status_code=400, detail="Phone already taken")
     
     user = service.update_profile(
         user_id=current_user.id,
         username=request.username,
-        email=request.email,
+        phone=request.phone,
         avatar=request.avatar
     )
     
@@ -137,10 +199,11 @@ def update_profile(
     return UserProfile(
         id=user.id,
         username=user.username,
-        email=user.email,
+        phone=user.phone,
         avatar=user.avatar,
         created_at=user.created_at
     )
+
 
 @router.delete("/me", status_code=204)
 def delete_account(
