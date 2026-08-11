@@ -41,6 +41,27 @@ def test_expired_and_revoked_invites_are_not_publicly_accepted(auth_client, db_s
     assert auth_client.get(f"/api/spaces/invites/{token}/preview").json()["status"] == "expired"
 
 
+def test_invalid_and_revoked_invites_are_safe(client, auth_client):
+    assert client.get("/api/spaces/invites/not-a-real-token/preview").json()["status"] == "invalid"
+    created = auth_client.post("/api/spaces/invites", json={})
+    assert created.status_code == 201
+    invite_id = created.json()["id"]
+    token = created.json()["invite_url"].rsplit("/", 1)[1]
+    assert auth_client.delete(f"/api/spaces/invites/{invite_id}").status_code == 204
+    assert client.get(f"/api/spaces/invites/{token}/preview").json()["status"] == "revoked"
+
+
+def test_group_and_non_participant_cannot_use_space(client):
+    owner, owner_token = _register(client, "+19900000011", "space_owner")
+    stranger, stranger_token = _register(client, "+19900000012", "space_stranger")
+    client.cookies.set("access_token", owner_token)
+    group = client.post("/api/chats/group", json={"name": "No space", "participant_ids": ["space_owner", "space_stranger"]})
+    assert group.status_code == 201
+    assert client.post(f"/api/spaces/{group.json()['id']}/activate", json={}).status_code == 404
+    client.cookies.set("access_token", stranger_token)
+    assert client.get(f"/api/spaces/{group.json()['id']}").status_code in (403, 404)
+
+
 def test_existing_private_chat_is_reused_for_invite(client):
     creator, creator_token = _register(client, "+19900000003", "pair_creator")
     joiner, joiner_token = _register(client, "+19900000004", "pair_joiner")
