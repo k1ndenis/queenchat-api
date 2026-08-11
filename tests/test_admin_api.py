@@ -1,6 +1,9 @@
 import time
 
-from app.core.database import ChatORM, ChatParticipantORM, MessageORM, UserORM
+from app.core.database import (
+    ChatORM, ChatParticipantORM, MessageORM, PrivateChatInviteORM,
+    PrivateSpaceInviteORM, UserORM,
+)
 from app.core.security import create_token
 
 
@@ -72,3 +75,22 @@ def test_chat_delete_and_pagination_bound(auth_client, db_session):
     assert auth_client.get("/api/admin/chats").status_code == 200
     assert auth_client.request("DELETE", "/api/admin/chats/admin-chat", json={"confirmation": "DELETE"}).status_code == 200
     assert db_session.get(ChatORM, "admin-chat") is None
+
+
+def test_admin_operational_lists_are_paged_and_hide_invite_tokens(auth_client, db_session):
+    make_admin(db_session, auth_client.user_id)
+    now = int(time.time())
+    db_session.add_all([
+        PrivateChatInviteORM(id="admin-chat-invite", token_hash="do-not-expose-chat", creator_user_id=auth_client.user_id, created_at=now, expires_at=now + 3600),
+        PrivateSpaceInviteORM(id="admin-space-invite", token_hash="do-not-expose-space", creator_user_id=auth_client.user_id, created_at=now + 1, expires_at=now + 3600),
+    ])
+    db_session.commit()
+
+    invites = auth_client.get("/api/admin/invites?page=1&page_size=1")
+    assert invites.status_code == 200
+    payload = invites.json()
+    assert payload["total"] == 2 and len(payload["items"]) == 1
+    assert "token" not in str(payload).lower()
+    assert auth_client.get("/api/admin/messages?page_size=101").json()["page_size"] == 100
+    assert auth_client.get("/api/admin/files?page_size=10").status_code == 200
+    assert auth_client.get("/api/admin/realtime").status_code == 200

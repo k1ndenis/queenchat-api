@@ -11,7 +11,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import Integer, cast, func, or_
+from sqlalchemy import Integer, case, cast, func, literal, or_, union_all
 from sqlalchemy.orm import Session
 
 from app.api.v1.notifications import delete_fcm_token
@@ -501,18 +501,43 @@ def storage_top_users(limit: int = 20, db: Session = Depends(get_db)):
     return {"items": [{"id": row[0], "username": row[1], "display_name": row[2], "files_count": row[3], "bytes": int(row[4] or 0)} for row in rows]}
 
 
-def _invite_payload(invite, kind: str, now: int) -> dict:
-    status = "revoked" if invite.revoked_at else "accepted" if invite.accepted_at else "expired" if invite.expires_at <= now else "active"
-    return {"id": invite.id, "kind": kind, "creator_user_id": invite.creator_user_id, "recipient_user_id": getattr(invite, "recipient_user_id", None), "chat_id": getattr(invite, "chat_id", None), "created_at": invite.created_at, "expires_at": invite.expires_at, "accepted_at": invite.accepted_at, "accepted_by_user_id": invite.accepted_by_user_id, "revoked_at": invite.revoked_at, "status": status}
-
-
 @router.get("/invites")
 def list_invites(status: Optional[Literal["active", "accepted", "expired", "revoked"]] = None, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
     page, page_size = _page(page, page_size); now = int(time.time())
-    rows = [_invite_payload(row, "private_chat", now) for row in db.query(PrivateChatInviteORM).all()] + [_invite_payload(row, "space", now) for row in db.query(PrivateSpaceInviteORM).all()]
-    if status: rows = [row for row in rows if row["status"] == status]
-    rows.sort(key=lambda row: row["created_at"], reverse=True)
-    return _page_result(rows[(page - 1) * page_size:page * page_size], page, page_size, len(rows))
+    # A SQL UNION keeps paging and filtering in PostgreSQL rather than loading
+    # every invite into the API process.  Tokens/token hashes are intentionally
+    # not selected.
+    def invite_status(model):
+        return case(
+            (model.revoked_at.is_not(None), literal("revoked")),
+            (model.accepted_at.is_not(None), literal("accepted")),
+            (model.expires_at <= now, literal("expired")),
+            else_=literal("active"),
+        )
+
+    chat_invites = db.query(
+        PrivateChatInviteORM.id.label("id"), literal("private_chat").label("kind"),
+        PrivateChatInviteORM.creator_user_id.label("creator_user_id"),
+        literal(None).label("recipient_user_id"), literal(None).label("chat_id"),
+        PrivateChatInviteORM.created_at.label("created_at"),
+        PrivateChatInviteORM.expires_at.label("expires_at"), PrivateChatInviteORM.accepted_at.label("accepted_at"),
+        PrivateChatInviteORM.accepted_by_user_id.label("accepted_by_user_id"),
+        PrivateChatInviteORM.revoked_at.label("revoked_at"), invite_status(PrivateChatInviteORM).label("status"),
+    )
+    space_invites = db.query(
+        PrivateSpaceInviteORM.id.label("id"), literal("space").label("kind"),
+        PrivateSpaceInviteORM.creator_user_id.label("creator_user_id"), PrivateSpaceInviteORM.recipient_user_id.label("recipient_user_id"),
+        PrivateSpaceInviteORM.chat_id.label("chat_id"), PrivateSpaceInviteORM.created_at.label("created_at"),
+        PrivateSpaceInviteORM.expires_at.label("expires_at"), PrivateSpaceInviteORM.accepted_at.label("accepted_at"),
+        PrivateSpaceInviteORM.accepted_by_user_id.label("accepted_by_user_id"),
+        PrivateSpaceInviteORM.revoked_at.label("revoked_at"), invite_status(PrivateSpaceInviteORM).label("status"),
+    )
+    combined = union_all(chat_invites.statement, space_invites.statement).subquery()
+    query = db.query(combined)
+    if status: query = query.filter(combined.c.status == status)
+    total = query.count()
+    rows = query.order_by(combined.c.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return _page_result([dict(row._mapping) for row in rows], page, page_size, total)
 
 
 @router.get("/spaces")
