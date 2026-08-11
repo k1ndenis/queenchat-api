@@ -229,7 +229,9 @@ def list_memories(chat_id: str, limit: int = 30, offset: int = 0, current_user: 
     limit = min(max(limit, 1), 100); offset = max(offset, 0)
     rows = db.query(SpaceMemoryORM, MessageORM, UserORM).join(MessageORM, SpaceMemoryORM.message_id == MessageORM.id).join(UserORM, MessageORM.sender_id == UserORM.id).filter(SpaceMemoryORM.chat_id == chat_id, MessageORM.deleted_at.is_(None)).order_by(SpaceMemoryORM.created_at.desc()).offset(offset).limit(limit).all()
     import json
-    return [{"id": memory.id, "message_id": message.id, "content": message.content, "images": json.loads(message.images or "[]"), "created_at": message.created_at, "author": _display(author)} for memory, message, author in rows]
+    return [{"id": memory.id, "message_id": message.id, "content": message.content,
+             "images": json.loads(message.images or "[]"), "media": json.loads(message.media) if message.media else None,
+             "created_at": message.created_at, "author": _display(author)} for memory, message, author in rows]
 
 @router.post("/{chat_id}/memories/{message_id}", status_code=201)
 def save_memory(chat_id: str, message_id: str, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):

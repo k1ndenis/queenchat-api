@@ -89,3 +89,35 @@ def test_private_chat_space_stays_pending_until_the_other_member_accepts(client)
     assert client.post(f"/api/spaces/{chat['id']}/accept-pending").status_code == 200
     assert client.get(f"/api/spaces/{chat['id']}/state").json()["status"] == "active"
     assert client.get(f"/api/spaces/{chat['id']}").status_code == 200
+
+
+def test_space_dates_and_saved_messages_crud(auth_client, client):
+    """Dates and saved messages stay scoped to an active private space."""
+    _register(client, "+19900000031", "space_crud_friend")
+    chat = auth_client.post("/api/chats/private", json={"username": "space_crud_friend"})
+    assert chat.status_code == 201
+    chat_id = chat.json()["id"]
+    assert auth_client.post(f"/api/spaces/{chat_id}/activate", json={}).status_code == 200
+
+    created = auth_client.post(f"/api/spaces/{chat_id}/dates", json={
+        "title": "Начало общения", "event_date": "2026-03-31", "emoji": "❤️", "repeats_yearly": True,
+    })
+    assert created.status_code == 201
+    date_id = created.json()["id"]
+    updated = auth_client.put(f"/api/spaces/{chat_id}/dates/{date_id}", json={
+        "title": "Познакомились", "event_date": "2026-03-31", "emoji": "✨", "repeats_yearly": False,
+    })
+    assert updated.status_code == 200 and updated.json()["repeats_yearly"] is False
+    assert auth_client.delete(f"/api/spaces/{chat_id}/dates/{date_id}").status_code == 204
+    assert auth_client.get(f"/api/spaces/{chat_id}/dates").json() == []
+
+    message = auth_client.post(f"/api/chats/{chat_id}/messages", json={"content": "Важное текстовое сообщение"})
+    assert message.status_code == 200
+    message_id = message.json()["id"]
+    assert auth_client.post(f"/api/spaces/{chat_id}/memories/{message_id}").status_code == 201
+    # Saving twice is intentionally idempotent rather than creating a duplicate.
+    assert auth_client.post(f"/api/spaces/{chat_id}/memories/{message_id}").status_code == 201
+    saved = auth_client.get(f"/api/spaces/{chat_id}/memories").json()
+    assert len(saved) == 1 and saved[0]["content"] == "Важное текстовое сообщение"
+    assert auth_client.delete(f"/api/spaces/{chat_id}/memories/{message_id}").status_code == 204
+    assert auth_client.get(f"/api/spaces/{chat_id}/memories").json() == []
