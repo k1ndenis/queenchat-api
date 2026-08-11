@@ -137,6 +137,19 @@ class PrivateSpaceInviteORM(Base):
     revoked_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
+class PrivateChatInviteORM(Base):
+    """A lightweight invitation to start a private QueenChat conversation."""
+    __tablename__ = "private_chat_invites"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    creator_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
+    expires_at: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    accepted_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    accepted_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    revoked_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
 class SpaceMemoryORM(Base):
     __tablename__ = "space_memories"
     __table_args__ = (UniqueConstraint("chat_id", "message_id", name="uq_space_memories_chat_message"),)

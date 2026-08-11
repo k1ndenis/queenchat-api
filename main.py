@@ -10,6 +10,7 @@ from app.api.v1 import files
 from app.api.v1 import webrtc
 from app.api.v1 import admin
 from app.api.v1 import spaces
+from app.api.v1 import chat_invites
 from app.core.database import lifespan
 from app.core import firebase
 
@@ -43,6 +44,7 @@ app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(webrtc.router, prefix="/api/webrtc", tags=["webrtc"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(spaces.router, prefix="/api/spaces", tags=["spaces"])
+app.include_router(chat_invites.router, prefix="/api/chats/invites", tags=["chat invites"])
 
 @app.get("/health")
 def health_check():
