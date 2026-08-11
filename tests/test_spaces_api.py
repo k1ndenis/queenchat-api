@@ -72,3 +72,20 @@ def test_existing_private_chat_is_reused_for_invite(client):
     token = client.post("/api/spaces/invites", json={}).json()["invite_url"].rsplit("/", 1)[1]
     client.cookies.set("access_token", joiner_token)
     assert client.post(f"/api/spaces/invites/{token}/accept").json()["chat_id"] == existing_id
+
+
+def test_private_chat_space_stays_pending_until_the_other_member_accepts(client):
+    creator, creator_token = _register(client, "+19900000021", "pending_creator")
+    joiner, joiner_token = _register(client, "+19900000022", "pending_joiner")
+    client.cookies.set("access_token", creator_token)
+    chat = client.post("/api/chats/private", json={"username": "pending_joiner"}).json()
+    created = client.post("/api/spaces/invites", json={"chat_id": chat["id"]})
+    assert created.status_code == 201
+    assert client.get(f"/api/spaces/{chat['id']}/state").json()["status"] == "pending"
+    assert client.get(f"/api/spaces/{chat['id']}").status_code == 404
+    client.cookies.set("access_token", joiner_token)
+    state = client.get(f"/api/spaces/{chat['id']}/state").json()
+    assert state["status"] == "pending" and state["can_accept"] is True
+    assert client.post(f"/api/spaces/{chat['id']}/accept-pending").status_code == 200
+    assert client.get(f"/api/spaces/{chat['id']}/state").json()["status"] == "active"
+    assert client.get(f"/api/spaces/{chat['id']}").status_code == 200

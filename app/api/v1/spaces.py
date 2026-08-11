@@ -34,6 +34,8 @@ class SpaceSettingsUpdate(BaseModel):
 class SpaceDateInput(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     event_date: str = Field(min_length=10, max_length=10)
+    emoji: str = Field(default="❤️", max_length=16)
+    repeats_yearly: bool = True
 
 class SpaceNoteInput(BaseModel):
     title: str = Field(min_length=1, max_length=160)
@@ -60,18 +62,19 @@ def _require_private_participant(db: Session, chat_id: str, user_id: str) -> Cha
 
 def _space(db: Session, chat_id: str) -> PrivateSpaceSettingsORM:
     space = db.get(PrivateSpaceSettingsORM, chat_id)
-    if not space or not space.enabled:
+    if not space or not space.enabled or space.status != "active":
         raise HTTPException(404, "Space is not enabled")
     return space
 
-def _enable(db: Session, chat_id: str, title: Optional[str] = None, theme: str = "queen") -> PrivateSpaceSettingsORM:
+def _enable(db: Session, chat_id: str, title: Optional[str] = None, theme: str = "queen", status: str = "active") -> PrivateSpaceSettingsORM:
     now = int(time.time())
     space = db.get(PrivateSpaceSettingsORM, chat_id)
     if not space:
-        space = PrivateSpaceSettingsORM(chat_id=chat_id, enabled=True, title=title, theme=theme, created_at=now, updated_at=now)
+        space = PrivateSpaceSettingsORM(chat_id=chat_id, enabled=True, status=status, title=title, theme=theme, created_at=now, updated_at=now)
         db.add(space)
     else:
         space.enabled = True
+        space.status = status
         if title is not None: space.title = title
         if theme in THEMES: space.theme = theme
         space.updated_at = now
@@ -95,6 +98,10 @@ def _note_dict(note: SpaceNoteORM) -> dict:
             "due_date": note.due_date, "completed": note.completed, "created_by": note.created_by,
             "created_at": note.created_at, "updated_at": note.updated_at}
 
+def _date_dict(item: SpaceDateORM) -> dict:
+    return {"id": item.id, "title": item.title, "event_date": item.event_date, "emoji": item.emoji,
+            "repeats_yearly": item.repeats_yearly, "created_by": item.created_by, "created_at": item.created_at}
+
 @router.get("/invites/{token}/preview")
 def preview_invite(token: str, db: Session = Depends(get_db)):
     invite = db.query(PrivateSpaceInviteORM).filter_by(token_hash=_hash(token)).first()
@@ -102,7 +109,8 @@ def preview_invite(token: str, db: Session = Depends(get_db)):
     state = _invite_state(invite, int(time.time()))
     if state != "active": return {"status": state}
     creator = db.get(UserORM, invite.creator_user_id)
-    return {"status": "active", "creator": {"display_name": _display(creator), "avatar": creator.avatar}, "expires_at": invite.expires_at}
+    recipient = db.get(UserORM, invite.recipient_user_id) if invite.recipient_user_id else None
+    return {"status": "active", "creator": {"display_name": _display(creator), "avatar": creator.avatar}, "recipient": None if not recipient else {"display_name": _display(recipient), "avatar": recipient.avatar}, "expires_at": invite.expires_at}
 
 @router.post("/invites", status_code=201)
 def create_invite(body: InviteCreate, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -110,12 +118,38 @@ def create_invite(body: InviteCreate, current_user: UserORM = Depends(get_curren
     active = db.query(func.count(PrivateSpaceInviteORM.id)).filter(PrivateSpaceInviteORM.creator_user_id == current_user.id, PrivateSpaceInviteORM.accepted_at.is_(None), PrivateSpaceInviteORM.revoked_at.is_(None), PrivateSpaceInviteORM.expires_at > now).scalar()
     if active >= MAX_ACTIVE_INVITES: raise HTTPException(429, "Maximum number of active invitations reached")
     if body.chat_id:
-        _require_private_participant(db, body.chat_id, current_user.id)
-        _enable(db, body.chat_id)
+        chat = _require_private_participant(db, body.chat_id, current_user.id)
+        recipient = next((p for p in chat.participants if p.id != current_user.id), None)
+        if not recipient: raise HTTPException(400, "A private space requires another participant")
+        existing = db.get(PrivateSpaceSettingsORM, body.chat_id)
+        if existing and existing.status == "active": raise HTTPException(409, "Space is already active")
+        _enable(db, body.chat_id, status="pending")
     token = secrets.token_urlsafe(32)
-    invite = PrivateSpaceInviteORM(token_hash=_hash(token), creator_user_id=current_user.id, chat_id=body.chat_id, expires_at=now + INVITE_TTL_SECONDS)
+    invite = PrivateSpaceInviteORM(token_hash=_hash(token), creator_user_id=current_user.id, recipient_user_id=recipient.id if body.chat_id else None, chat_id=body.chat_id, expires_at=now + INVITE_TTL_SECONDS)
     db.add(invite); db.commit(); db.refresh(invite)
-    return {"id": invite.id, "invite_url": f"https://queenchat.ru/invite/{token}", "expires_at": invite.expires_at}
+    return {"id": invite.id, "invite_url": f"https://queenchat.ru/invite/{token}", "expires_at": invite.expires_at, "chat_id": body.chat_id}
+
+@router.get("/{chat_id}/state")
+def space_state(chat_id: str, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require_private_participant(db, chat_id, current_user.id)
+    space = db.get(PrivateSpaceSettingsORM, chat_id)
+    if not space: return {"status": "not_created"}
+    result = {"status": space.status, "created_at": space.created_at}
+    if space.status == "pending":
+        invite = db.query(PrivateSpaceInviteORM).filter(PrivateSpaceInviteORM.chat_id == chat_id, PrivateSpaceInviteORM.accepted_at.is_(None), PrivateSpaceInviteORM.revoked_at.is_(None), PrivateSpaceInviteORM.expires_at > int(time.time())).order_by(PrivateSpaceInviteORM.created_at.desc()).first()
+        if invite:
+            result.update({"invite_id": invite.id, "can_accept": invite.recipient_user_id == current_user.id, "created_by_me": invite.creator_user_id == current_user.id})
+    return result
+
+@router.post("/{chat_id}/accept-pending")
+def accept_pending_space(chat_id: str, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require_private_participant(db, chat_id, current_user.id)
+    invite = db.query(PrivateSpaceInviteORM).filter(PrivateSpaceInviteORM.chat_id == chat_id, PrivateSpaceInviteORM.recipient_user_id == current_user.id, PrivateSpaceInviteORM.accepted_at.is_(None), PrivateSpaceInviteORM.revoked_at.is_(None), PrivateSpaceInviteORM.expires_at > int(time.time())).with_for_update().first()
+    if not invite: raise HTTPException(404, "Pending invitation not found")
+    space = _enable(db, chat_id, status="active")
+    invite.accepted_at, invite.accepted_by_user_id = int(time.time()), current_user.id
+    db.commit()
+    return {"chat_id": chat_id, "space": {"status": space.status, "theme": space.theme, "title": space.title}}
 
 @router.get("/invites/active")
 def active_invites(current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -144,7 +178,11 @@ def accept_invite(token: str, current_user: UserORM = Depends(get_current_user),
     if not chat:
         chat_response = service.create_chat(None, False, invite.creator_user_id, [invite.creator_user_id, current_user.id], "private")
         chat = service.repo.get_chat(chat_response.id)
-    space = _enable(db, chat.id)
+    if invite.recipient_user_id and invite.recipient_user_id != current_user.id:
+        raise HTTPException(403, "This invitation belongs to another user")
+    if invite.chat_id:
+        chat = _require_private_participant(db, invite.chat_id, current_user.id)
+    space = _enable(db, chat.id, status="active")
     invite.chat_id, invite.accepted_at, invite.accepted_by_user_id = chat.id, int(time.time()), current_user.id
     db.commit()
     return {"chat_id": chat.id, "space": {"chat_id": space.chat_id, "theme": space.theme, "title": space.title}}
@@ -153,7 +191,7 @@ def accept_invite(token: str, current_user: UserORM = Depends(get_current_user),
 def activate_space(chat_id: str, body: SpaceActivate, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
     if body.theme not in THEMES: raise HTTPException(422, "Unknown theme")
     _require_private_participant(db, chat_id, current_user.id)
-    space = _enable(db, chat_id, body.title, body.theme); db.commit()
+    space = _enable(db, chat_id, body.title, body.theme, status="active"); db.commit()
     return {"chat_id": space.chat_id, "enabled": space.enabled, "title": space.title, "theme": space.theme, "created_at": space.created_at}
 
 @router.put("/{chat_id}/settings")
@@ -213,21 +251,21 @@ def remove_memory(chat_id: str, message_id: str, current_user: UserORM = Depends
 def list_dates(chat_id: str, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
     _require_private_participant(db, chat_id, current_user.id); _space(db, chat_id)
     rows = db.query(SpaceDateORM).filter_by(chat_id=chat_id).order_by(SpaceDateORM.event_date.asc()).all()
-    return [{"id": x.id, "title": x.title, "event_date": x.event_date, "created_by": x.created_by, "created_at": x.created_at} for x in rows]
+    return [_date_dict(x) for x in rows]
 
 @router.post("/{chat_id}/dates", status_code=201)
 def create_date(chat_id: str, body: SpaceDateInput, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
     _require_private_participant(db, chat_id, current_user.id); _space(db, chat_id)
-    item = SpaceDateORM(chat_id=chat_id, title=body.title.strip(), event_date=_validate_iso_date(body.event_date), created_by=current_user.id); db.add(item); db.commit()
-    return {"id": item.id, "title": item.title, "event_date": item.event_date}
+    item = SpaceDateORM(chat_id=chat_id, title=body.title.strip(), event_date=_validate_iso_date(body.event_date), emoji=body.emoji or "❤️", repeats_yearly=body.repeats_yearly, created_by=current_user.id); db.add(item); db.commit()
+    return _date_dict(item)
 
 @router.put("/{chat_id}/dates/{date_id}")
 def update_date(chat_id: str, date_id: str, body: SpaceDateInput, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
     _require_private_participant(db, chat_id, current_user.id); _space(db, chat_id)
     item = db.query(SpaceDateORM).filter_by(id=date_id, chat_id=chat_id).first()
     if not item: raise HTTPException(404, "Date not found")
-    item.title, item.event_date = body.title.strip(), _validate_iso_date(body.event_date); db.commit()
-    return {"id": item.id, "title": item.title, "event_date": item.event_date}
+    item.title, item.event_date, item.emoji, item.repeats_yearly = body.title.strip(), _validate_iso_date(body.event_date), body.emoji or "❤️", body.repeats_yearly; db.commit()
+    return _date_dict(item)
 
 @router.delete("/{chat_id}/dates/{date_id}", status_code=204)
 def delete_date(chat_id: str, date_id: str, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):

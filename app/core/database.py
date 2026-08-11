@@ -112,6 +112,9 @@ class PrivateSpaceSettingsORM(Base):
     __tablename__ = "private_space_settings"
     chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    # enabled is kept for compatibility with the first Spaces release.  New
+    # code must use status: a pair space is usable only after acceptance.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     title: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     theme: Mapped[str] = mapped_column(String(24), nullable=False, default="queen", server_default="queen")
     accent: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
@@ -125,6 +128,7 @@ class PrivateSpaceInviteORM(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     creator_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    recipient_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
     chat_id: Mapped[Optional[str]] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), index=True, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
     expires_at: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
@@ -149,6 +153,8 @@ class SpaceDateORM(Base):
     chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     event_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    emoji: Mapped[str] = mapped_column(String(16), nullable=False, default="❤️", server_default="❤️")
+    repeats_yearly: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
 
