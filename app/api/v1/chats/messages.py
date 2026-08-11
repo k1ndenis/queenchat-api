@@ -10,6 +10,7 @@ from app.services.message_service import MessageService
 from app.models.message import MessageCreate, MessageResponse
 from app.core.websocket import manager
 from app.api.v1.chats import validate_chat_id
+from app.core.rate_limit import MESSAGE_BURST, MESSAGE_SUSTAINED, hit
 
 router = APIRouter()
 
@@ -22,6 +23,8 @@ async def send_message(
     db: Session = Depends(get_db)
 ) -> MessageResponse:
     chat_id = validate_chat_id(chat_id)
+    hit(MESSAGE_BURST, current_user.id)
+    hit(MESSAGE_SUSTAINED, current_user.id)
     
     try:
         message_service = MessageService(db)

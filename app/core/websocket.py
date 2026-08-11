@@ -9,6 +9,7 @@ from app.core.dependency import get_db
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = "HS256"
 logger = logging.getLogger(__name__)
+MAX_WS_PER_USER = int(os.getenv("MAX_WS_PER_USER", "8"))
 
 
 class ConnectionManager:
@@ -23,6 +24,11 @@ class ConnectionManager:
         if user_id not in self.active_connections[chat_id]:
             self.active_connections[chat_id][user_id] = set()
         self.active_connections[chat_id][user_id].add(websocket)
+
+    def connection_count(self, user_id: str) -> int:
+        return len(self.global_connections.get(user_id, set())) + sum(
+            len(users.get(user_id, set())) for users in self.active_connections.values()
+        )
 
     def disconnect(self, chat_id: str, user_id: str, websocket: WebSocket | None = None):
         if chat_id in self.active_connections:
@@ -128,6 +134,9 @@ async def get_current_user_ws(
     
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("scope") != "websocket":
+            await websocket.close(code=4004, reason="Invalid token")
+            return None
         user_id = payload.get("user_id")
         if user_id is None:
             await websocket.close(code=4001, reason="Invalid token")

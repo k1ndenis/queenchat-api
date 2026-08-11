@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.database import (ChatORM, ChatParticipantORM, MessageORM, PrivateSpaceInviteORM,
     PrivateSpaceSettingsORM, SpaceDateORM, SpaceMemoryORM, SpaceNoteORM, UserORM)
 from app.core.dependency import get_current_user, get_db
+from app.core.rate_limit import INVITE_CREATE, hit
 from app.services.chat_service import ChatService
 
 router = APIRouter()
@@ -114,6 +115,7 @@ def preview_invite(token: str, db: Session = Depends(get_db)):
 
 @router.post("/invites", status_code=201)
 def create_invite(body: InviteCreate, current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
+    hit(INVITE_CREATE, current_user.id)
     now = int(time.time())
     active = db.query(func.count(PrivateSpaceInviteORM.id)).filter(PrivateSpaceInviteORM.creator_user_id == current_user.id, PrivateSpaceInviteORM.accepted_at.is_(None), PrivateSpaceInviteORM.revoked_at.is_(None), PrivateSpaceInviteORM.expires_at > now).scalar()
     if active >= MAX_ACTIVE_INVITES: raise HTTPException(429, "Maximum number of active invitations reached")

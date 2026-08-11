@@ -7,6 +7,8 @@ if TESTING:
     print("⚠️ Redis is DISABLED in test mode")
     
     class MockRedis:
+        def __init__(self):
+            self.values = {}
         def ping(self): 
             return True
         
@@ -17,9 +19,20 @@ if TESTING:
             return True
         
         def get(self, *args, **kwargs): 
-            return None
+            return self.values.get(args[0])
+        def incr(self, key):
+            self.values[key] = int(self.values.get(key, 0)) + 1
+            return self.values[key]
+        def incrby(self, key, amount):
+            self.values[key] = int(self.values.get(key, 0)) + int(amount)
+            return self.values[key]
+        def expire(self, *args, **kwargs):
+            return True
+        def ttl(self, *args, **kwargs):
+            return 60
         
         def delete(self, *args, **kwargs): 
+            self.values.pop(args[0], None)
             return 1
         
         def scan_iter(self, *args, **kwargs): 

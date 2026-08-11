@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.database import PrivateChatInviteORM, UserORM
 from app.core.dependency import get_current_user, get_db
 from app.services.chat_service import ChatService
+from app.core.rate_limit import INVITE_CREATE, hit
 
 router = APIRouter()
 INVITE_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -29,6 +30,7 @@ def _state(invite: PrivateChatInviteORM, now: int) -> str:
 
 @router.post("", status_code=201)
 def create_invite(current_user: UserORM = Depends(get_current_user), db: Session = Depends(get_db)):
+    hit(INVITE_CREATE, current_user.id)
     now = int(time.time())
     active = db.query(func.count(PrivateChatInviteORM.id)).filter(
         PrivateChatInviteORM.creator_user_id == current_user.id,

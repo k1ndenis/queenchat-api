@@ -16,7 +16,9 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     display_name: Optional[str] = None
+    turnstile_token: Optional[str] = None
 
 class LoginRequest(BaseModel):
     phone: str
     password: str
+    turnstile_token: Optional[str] = None

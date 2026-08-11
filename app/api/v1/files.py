@@ -14,6 +14,7 @@ import math
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User
 from app.services.chat_service import ChatService
+from app.core.upload_security import ensure_disk_capacity, enforce_daily_quota, image_extension_and_signature
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 MAX_FILE_SIZE = 10 * 1024 * 1024
 MAX_FILES = 10
+AVATAR_LIMIT = 5 * 1024 * 1024
 VOICE_DIR = UPLOAD_ROOT / 'voice'; VIDEO_DIR = UPLOAD_ROOT / 'video_notes'; TMP_DIR = UPLOAD_ROOT / 'tmp'
 for directory in (VOICE_DIR, VIDEO_DIR, TMP_DIR): directory.mkdir(parents=True, exist_ok=True)
 VOICE_LIMIT, VIDEO_LIMIT = 25 * 1024 * 1024, 100 * 1024 * 1024
@@ -124,6 +126,7 @@ async def _waveform(path: Path, samples: int = 64) -> list[float]:
     except Exception: return []
 
 async def _save_upload(file: UploadFile, limit: int) -> Path:
+    ensure_disk_capacity(UPLOAD_ROOT)
     path = TMP_DIR / uuid.uuid4().hex
     size = 0
     try:
@@ -135,6 +138,15 @@ async def _save_upload(file: UploadFile, limit: int) -> Path:
         return path
     except Exception:
         path.unlink(missing_ok=True); raise
+
+async def _read_image(file: UploadFile, limit: int) -> tuple[str, bytes]:
+    """Bounded read, then validate the real image signature before writing it."""
+    ensure_disk_capacity(UPLOAD_ROOT)
+    content = await file.read(limit + 1)
+    if len(content) > limit:
+        logger.warning("UPLOAD_REJECTED reason=image_too_large")
+        raise HTTPException(413, detail="Image file is too large")
+    return image_extension_and_signature(file.filename, content), content
 
 @router.post('/upload-voice')
 async def upload_voice(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
@@ -211,22 +223,16 @@ async def upload_images(
     errors = []
     
     for file in files:
-        ext = os.path.splitext(file.filename)[1].lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            errors.append(f"{file.filename}: unsupported file type")
-            continue
-        
-        file.file.seek(0, 2)
-        size = file.file.tell()
-        file.file.seek(0)
-        if size > MAX_FILE_SIZE:
-            errors.append(f"{file.filename}: file too large (max 10MB)")
+        try:
+            ext, content = await _read_image(file, MAX_FILE_SIZE)
+            enforce_daily_quota(current_user.id, len(content))
+        except HTTPException as exc:
+            errors.append(f"{file.filename}: {exc.detail}")
             continue
         
         new_filename = f"{uuid.uuid4().hex}{ext}"
         file_path = UPLOAD_DIR / new_filename
         
-        content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
         
@@ -246,20 +252,11 @@ async def upload_avatar(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
-    
-    file.file.seek(0, 2)
-    size = file.file.tell()
-    file.file.seek(0)
-    if size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
-    
-    ext = os.path.splitext(file.filename)[1].lower()
+    ext, content = await _read_image(file, AVATAR_LIMIT)
+    enforce_daily_quota(current_user.id, len(content))
     new_filename = f"avatar_{current_user.id}{ext}"
     file_path = UPLOAD_DIR / new_filename
     
-    content = await file.read()
     with open(file_path, "wb") as f:
         f.write(content)
     
@@ -283,20 +280,11 @@ async def upload_chat_avatar(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
-    
-    file.file.seek(0, 2)
-    size = file.file.tell()
-    file.file.seek(0)
-    if size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
-    
-    ext = os.path.splitext(file.filename)[1].lower()
+    ext, content = await _read_image(file, AVATAR_LIMIT)
+    enforce_daily_quota(current_user.id, len(content))
     new_filename = f"chat_avatar_{uuid.uuid4().hex}{ext}"
     file_path = UPLOAD_DIR / new_filename
     
-    content = await file.read()
     with open(file_path, "wb") as f:
         f.write(content)
     
@@ -318,18 +306,10 @@ async def upload_chat_background(
         raise HTTPException(status_code=403, detail="You are not a participant of this chat")
     if chat.chat_type != "private" and chat.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Only the chat creator can change this background")
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Unsupported file type")
-    file.file.seek(0, 2)
-    size = file.file.tell()
-    file.file.seek(0)
-    if size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+    ext, content = await _read_image(file, MAX_FILE_SIZE)
+    enforce_daily_quota(current_user.id, len(content))
 
     new_filename = f"chat_background_{chat_id}_{uuid.uuid4().hex}{ext}"
     with open(UPLOAD_DIR / new_filename, "wb") as destination:
-        destination.write(await file.read())
+        destination.write(content)
     return {"success": True, "url": f"/uploads/images/{new_filename}"}

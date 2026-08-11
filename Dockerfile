@@ -20,4 +20,4 @@ COPY . .
 
 EXPOSE 3002
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 3002"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 3002 --ws-max-size 262144 --ws-ping-interval 25 --ws-ping-timeout 20"]

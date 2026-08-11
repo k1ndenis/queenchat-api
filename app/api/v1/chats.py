@@ -7,7 +7,8 @@ import asyncio
 import time
 import logging
 
-from app.core.websocket import manager, get_current_user_ws
+from app.core.websocket import manager, get_current_user_ws, MAX_WS_PER_USER
+from app.core.rate_limit import WS_EVENTS, hit
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User, MessageCommentORM, ChatBackgroundPreferenceORM
 from app.core.redis import redis_client
@@ -484,11 +485,16 @@ async def global_websocket_endpoint(
     user = await get_current_user_ws(websocket, token, db)
     if not user:
         return
+    if manager.connection_count(user.id) >= MAX_WS_PER_USER:
+        logger.warning("WS_CONNECTION_LIMIT user_id=%s", user.id)
+        await websocket.close(code=4008, reason="Too many connections")
+        return
     await manager.connect_global(user.id, websocket)
     logger.info('[SocketTrace] global_ws_connected user_id=%s', user.id)
     try:
         while True:
             data = await websocket.receive_json()
+            hit(WS_EVENTS, user.id)
             if data.get("type") == "ping":
                 request_id = data.get("request_id")
                 logger.debug("[WSHealth] ping received: scope=global user_id=%s request_id=%s", user.id, request_id)
@@ -532,6 +538,10 @@ async def websocket_endpoint(
     user = await get_current_user_ws(websocket, token, db)
     if not user:
         return
+    if manager.connection_count(user.id) >= MAX_WS_PER_USER:
+        logger.warning("WS_CONNECTION_LIMIT user_id=%s", user.id)
+        await websocket.close(code=4008, reason="Too many connections")
+        return
     
     chat_service = ChatService(db)
     
@@ -556,6 +566,7 @@ async def websocket_endpoint(
     try:
         while True:
             data = await websocket.receive_json()
+            hit(WS_EVENTS, user.id)
 
             logger.debug(
                 "WebSocket message received: chat_id=%s user_id=%s type=%s signal_type=%s",
