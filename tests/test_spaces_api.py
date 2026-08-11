@@ -1,7 +1,7 @@
 """Critical P0 pair-space invite flow tests."""
 import time
 
-from app.core.database import ChatORM, ChatParticipantORM, PrivateSpaceInviteORM
+from app.core.database import ChatORM, ChatParticipantORM, MessageORM, PrivateSpaceInviteORM
 
 
 def _register(client, phone, username):
@@ -121,3 +121,46 @@ def test_space_dates_and_saved_messages_crud(auth_client, client):
     assert len(saved) == 1 and saved[0]["content"] == "Важное текстовое сообщение"
     assert auth_client.delete(f"/api/spaces/{chat_id}/memories/{message_id}").status_code == 204
     assert auth_client.get(f"/api/spaces/{chat_id}/memories").json() == []
+
+
+def test_space_notes_and_plans_crud(auth_client, client):
+    _register(client, "+19900000041", "notes_friend")
+    chat_id = auth_client.post("/api/chats/private", json={"username": "notes_friend"}).json()["id"]
+    assert auth_client.post(f"/api/spaces/{chat_id}/activate", json={}).status_code == 200
+
+    note = auth_client.post(f"/api/spaces/{chat_id}/notes", json={"title": "Купить билеты", "content": "До пятницы", "note_type": "note"})
+    assert note.status_code == 201
+    note_id = note.json()["id"]
+    updated = auth_client.put(f"/api/spaces/{chat_id}/notes/{note_id}", json={"title": "Купить билеты", "content": "До четверга", "note_type": "note", "completed": False})
+    assert updated.status_code == 200 and updated.json()["content"] == "До четверга"
+    assert auth_client.delete(f"/api/spaces/{chat_id}/notes/{note_id}").status_code == 204
+
+    plan = auth_client.post(f"/api/spaces/{chat_id}/notes", json={"title": "Поехать в отпуск", "content": "Выбрать даты", "note_type": "plan", "due_date": "2026-08-20"})
+    assert plan.status_code == 201
+    plan_id = plan.json()["id"]
+    completed = auth_client.put(f"/api/spaces/{chat_id}/notes/{plan_id}", json={"title": "Поехать в отпуск", "content": "Билеты куплены", "note_type": "plan", "due_date": "2026-08-21", "completed": True})
+    assert completed.status_code == 200
+    assert completed.json()["completed"] is True and completed.json()["due_date"] == "2026-08-21"
+    assert auth_client.delete(f"/api/spaces/{chat_id}/notes/{plan_id}").status_code == 204
+
+
+def test_space_notes_and_memories_are_scoped_and_memory_removal_keeps_message(auth_client, client, db_session):
+    _register(client, "+19900000051", "scope_friend")
+    chat_id = auth_client.post("/api/chats/private", json={"username": "scope_friend"}).json()["id"]
+    assert auth_client.post(f"/api/spaces/{chat_id}/activate", json={}).status_code == 200
+    note_id = auth_client.post(f"/api/spaces/{chat_id}/notes", json={"title": "Только здесь", "note_type": "note"}).json()["id"]
+    message_id = auth_client.post(f"/api/chats/{chat_id}/messages", json={"content": "Исходное сообщение"}).json()["id"]
+    assert auth_client.post(f"/api/spaces/{chat_id}/memories/{message_id}").status_code == 201
+    assert auth_client.delete(f"/api/spaces/{chat_id}/memories/{message_id}").status_code == 204
+    assert db_session.get(MessageORM, message_id) is not None
+
+    _register(client, "+19900000052", "other_space_friend")
+    other_chat_id = auth_client.post("/api/chats/private", json={"username": "other_space_friend"}).json()["id"]
+    assert auth_client.post(f"/api/spaces/{other_chat_id}/activate", json={}).status_code == 200
+    assert auth_client.put(f"/api/spaces/{other_chat_id}/notes/{note_id}", json={"title": "x", "note_type": "note"}).status_code == 404
+    assert auth_client.delete(f"/api/spaces/{other_chat_id}/notes/{note_id}").status_code == 404
+
+    _, stranger_token = _register(client, "+19900000053", "space_nonparticipant")
+    client.cookies.set("access_token", stranger_token)
+    assert client.post(f"/api/spaces/{chat_id}/notes", json={"title": "Нельзя", "note_type": "note"}).status_code == 403
+    assert client.delete(f"/api/spaces/{chat_id}/memories/{message_id}").status_code == 403
