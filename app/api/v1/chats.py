@@ -8,7 +8,7 @@ import time
 import logging
 
 from app.core.websocket import manager, get_current_user_ws, MAX_WS_PER_USER
-from app.core.rate_limit import WS_EVENTS, hit
+from app.core.rate_limit import COMMENT_EVENTS, MESSAGE_BURST, MESSAGE_SUSTAINED, REACTION_EVENTS, WS_EVENTS, hit
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User, MessageCommentORM, ChatBackgroundPreferenceORM
 from app.core.redis import redis_client
@@ -1009,6 +1009,8 @@ async def send_message(
     db: Session = Depends(get_db)
 ) -> MessageResponse:
     chat_id = validate_chat_id(chat_id)
+    hit(MESSAGE_BURST, current_user.id)
+    hit(MESSAGE_SUSTAINED, current_user.id)
     
     print(f"🔵 [MESSAGE] Sending to chat {chat_id} from user {current_user.id}")
     
@@ -1397,6 +1399,7 @@ def get_comments(chat_id: str, message_id: str, current_user: User = Depends(get
 
 @router.post("/{chat_id}/messages/{message_id}/comments")
 async def create_comment(chat_id: str, message_id: str, payload: CommentCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    hit(COMMENT_EVENTS, current_user.id)
     channel_id = validate_chat_id(chat_id); post = _comment_target(channel_id, message_id, current_user, db)
     comment = MessageCommentORM(id=str(__import__('uuid').uuid4()), message_id=message_id, channel_id=channel_id, user_id=current_user.id, content=payload.content.strip(), created_at=int(time.time()))
     db.add(comment); db.commit(); db.refresh(comment)
@@ -1434,6 +1437,7 @@ async def set_message_reaction(
     db: Session = Depends(get_db)
 ):
     chat_id = validate_chat_id(chat_id)
+    hit(REACTION_EVENTS, current_user.id)
     emoji = reaction_data.emoji
     if emoji not in ALLOWED_REACTIONS:
         raise HTTPException(status_code=400, detail="Unsupported reaction")
@@ -1505,6 +1509,7 @@ async def delete_message_reaction(
     db: Session = Depends(get_db)
 ):
     chat_id = validate_chat_id(chat_id)
+    hit(REACTION_EVENTS, current_user.id)
     message_service = MessageService(db)
     chat_service = ChatService(db)
     message = _assert_reaction_target(chat_id, message_id, current_user, message_service, chat_service)
