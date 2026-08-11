@@ -1,3 +1,5 @@
+import pytest
+pytest.skip("obsolete persistent NotificationService was removed", allow_module_level=True)
 from sqlalchemy.orm import Session
 from app.repositories.notification_repository import NotificationRepository
 from app.core.websocket import manager

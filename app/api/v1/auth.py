@@ -3,20 +3,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.services.auth_service import AuthService
-from app.services.captcha_service import captcha_service
 from app.core.dependency import get_db, get_auth_service, get_current_user
 from app.core.database import UserORM as User
 from app.core.security import create_token
 from app.models.user import UserProfile, UpdateProfileRequest
 from app.models.auth import (
-    PhoneRequest,
     RegisterRequest,
     LoginRequest,
-    ForgotPasswordRequest,
-    ResetPasswordRequest,
-    VerifyCodeRequest,
-    TokenResponse,
-    SendCodeRequest
+    TokenResponse
 )
 
 router = APIRouter()
@@ -30,13 +24,13 @@ def get_users(
     return auth_service.get_all_users(exclude_current=True, current_user_id=current_user.id)
 
 
-@router.get("/users/{user_id}")
+@router.get("/user/{username}")
 def get_user_profile(
-    user_id: str,
+    username: str,
     current_user: User = Depends(get_current_user),
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    user_profile = auth_service.get_user_profile(user_id)
+    user_profile = auth_service.get_user_profile(username)
     
     if not user_profile:
         raise HTTPException(
@@ -47,28 +41,12 @@ def get_user_profile(
     return user_profile
 
 
-@router.post("/send-code")
-def send_code(
-    request: SendCodeRequest,
-    auth_service: AuthService = Depends(get_auth_service)
-):
-    # Проверяем капчу
-    if not captcha_service.verify(request.captcha_token):
-        raise HTTPException(status_code=400, detail="Captcha verification failed")
-    
-    return auth_service.send_verification_code(request.phone)
-
-
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=TokenResponse)
 def register(
     request: RegisterRequest,
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    # Проверяем капчу
-    if not captcha_service.verify(request.captcha_token):
-        raise HTTPException(status_code=400, detail="Captcha verification failed")
-    
-    result = auth_service.register(request.phone, request.username, request.password, request.code)
+    result = auth_service.register(request.phone, request.username, request.password)
     
     response = JSONResponse(content={
         "token": result["token"],
@@ -93,9 +71,6 @@ def login(
     request: LoginRequest,
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    if request.captcha_token and not captcha_service.verify(request.captcha_token):
-        raise HTTPException(status_code=400, detail="Captcha verification failed")
-    
     result = auth_service.login(request.phone, request.password)
     
     response = JSONResponse(content={
@@ -116,42 +91,18 @@ def login(
     return response
 
 
-@router.post("/forgot-password")
-def forgot_password(
-    request: SendCodeRequest,
-    auth_service: AuthService = Depends(get_auth_service)
-):
-    # Проверяем капчу
-    if not captcha_service.verify(request.captcha_token):
-        raise HTTPException(status_code=400, detail="Captcha verification failed")
-    
-    return auth_service.send_reset_code(request.phone)
-
-
-@router.post("/verify-reset-code")
-def verify_reset_code(
-    request: VerifyCodeRequest,
-    auth_service: AuthService = Depends(get_auth_service)
-):
-    return auth_service.verify_reset_code(request.phone, request.code)
-
-
-@router.post("/reset-password")
-def reset_password(
-    request: ResetPasswordRequest,
-    auth_service: AuthService = Depends(get_auth_service)
-):
-    return auth_service.reset_password(request.phone, request.code, request.new_password)
-
-
 @router.get("/me")
 def get_me(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
         "username": current_user.username,
         "phone": current_user.phone,
+        "display_name": current_user.display_name,
+        "email": current_user.email,
         "avatar": current_user.avatar,
-        "created_at": current_user.created_at
+        "created_at": current_user.created_at,
+        "role": current_user.role,
+        "is_blocked": current_user.is_blocked,
     }
 
 
@@ -176,21 +127,28 @@ def update_profile(
 ):
     service = AuthService(db)
     
-    if request.username != current_user.username:
+    if request.username is not None and request.username != current_user.username:
         existing = service.repository.get_by_username(request.username)
         if existing:
             raise HTTPException(status_code=400, detail="Username already taken")
     
-    if request.phone and request.phone != current_user.phone:
+    if request.phone is not None and request.phone != current_user.phone:
         existing = service.repository.get_by_phone(request.phone)
         if existing:
             raise HTTPException(status_code=400, detail="Phone already taken")
     
+    if request.email is not None and request.email != current_user.email:
+        existing = service.repository.get_by_email(request.email)
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already taken")
+    
     user = service.update_profile(
         user_id=current_user.id,
-        username=request.username,
+        username=request.username if request.username is not None else current_user.username,
         phone=request.phone,
-        avatar=request.avatar
+        avatar=request.avatar,
+        display_name=request.display_name,
+        email=request.email
     )
     
     if not user:
@@ -200,6 +158,8 @@ def update_profile(
         id=user.id,
         username=user.username,
         phone=user.phone,
+        display_name=user.display_name,
+        email=user.email,
         avatar=user.avatar,
         created_at=user.created_at
     )

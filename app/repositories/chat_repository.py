@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import uuid
 import time
-from app.core.database import ChatORM, ChatParticipantORM, MessageORM
+from app.core.database import ChatORM, ChatParticipantORM, MessageORM, MessageReactionORM
 
 class ChatRepository:
     def __init__(self, db: Session):
@@ -20,6 +20,7 @@ class ChatRepository:
         
         return self.db.query(ChatORM).filter(
             ChatORM.id.in_([c[0] for c in chat_ids]),
+            ChatORM.chat_type == "private",
             ChatORM.is_group == False
         ).first()
 
@@ -39,6 +40,16 @@ class ChatRepository:
 
     def delete_chat(self, chat_id: str) -> bool:
         try:
+            message_ids = [
+                row[0] for row in self.db.query(MessageORM.id).filter(
+                    MessageORM.chat_id == chat_id
+                ).all()
+            ]
+            if message_ids:
+                self.db.query(MessageReactionORM).filter(
+                    MessageReactionORM.message_id.in_(message_ids)
+                ).delete(synchronize_session=False)
+
             self.db.query(ChatParticipantORM).filter(
                 ChatParticipantORM.chat_id == chat_id
             ).delete(synchronize_session=False)

@@ -10,29 +10,13 @@ class PhoneRequest(BaseModel):
 
 class SendCodeRequest(BaseModel):
     phone: str
-    captcha_token: str
 
 class RegisterRequest(BaseModel):
     phone: str
     username: str
     password: str
-    code: str
-    captcha_token: str
+    display_name: Optional[str] = None
 
 class LoginRequest(BaseModel):
     phone: str
     password: str
-    captcha_token: Optional[str] = None
-
-class ForgotPasswordRequest(BaseModel):
-    phone: str
-    captcha_token: str
-
-class VerifyCodeRequest(BaseModel):
-    phone: str
-    code: str
-
-class ResetPasswordRequest(BaseModel):
-    phone: str
-    code: str
-    new_password: str

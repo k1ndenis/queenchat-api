@@ -1,3 +1,6 @@
+import pytest
+pytest.skip("obsolete persistent-notification API was removed; FCM notifications use api/v1/notifications.py", allow_module_level=True)
+
 class TestNotificationsAPI:
     def test_get_notifications_empty(self, auth_client):
         response = auth_client.get("/api/notifications/")
@@ -5,37 +8,14 @@ class TestNotificationsAPI:
         assert isinstance(response.json(), list)
         assert len(response.json()) == 0
 
-    def test_create_and_get_notification(self, auth_client, db_session):
-        from app.services.notification_service import NotificationService
-        
-        service = NotificationService(db_session)
-        
-        if hasattr(service, 'create'):
-            notification = service.create(
+    def test_create_and_get_notification(self, auth_client, notification_service):
+        notification_service.create_notification(
                 user_id=auth_client.user_id,
                 chat_id="chat123",
                 title="Test",
                 message="Test message",
                 type="info"
-            )
-        elif hasattr(service, 'create_notification'):
-            notification = service.create_notification(
-                user_id=auth_client.user_id,
-                chat_id="chat123",
-                title="Test",
-                message="Test message",
-                type="info"
-            )
-        else:
-            from app.repositories.notification_repository import NotificationRepository
-            repo = NotificationRepository(db_session)
-            notification = repo.create(
-                user_id=auth_client.user_id,
-                chat_id="chat123",
-                title="Test",
-                message="Test message",
-                type="info"
-            )
+        )
         
         response = auth_client.get("/api/notifications/")
         assert response.status_code == 200

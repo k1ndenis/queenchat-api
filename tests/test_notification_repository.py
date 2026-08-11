@@ -1,4 +1,5 @@
 import pytest
+pytest.skip("obsolete persistent NotificationRepository was removed", allow_module_level=True)
 from unittest.mock import Mock, patch
 from sqlalchemy.orm import Session
 from app.repositories.notification_repository import NotificationRepository

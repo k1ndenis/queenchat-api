@@ -17,35 +17,59 @@ class AuthRepository:
     def get_by_phone(self, phone: str) -> UserORM | None:
         return self.db.query(UserORM).filter(UserORM.phone == phone).first()
 
+    def get_by_email(self, email: str) -> UserORM | None:
+        return self.db.query(UserORM).filter(UserORM.email == email).first()
+
     def get_all_users(self, exclude_user_id: str = None) -> list[UserORM]:
         query = self.db.query(UserORM)
         if exclude_user_id:
             query = query.filter(UserORM.id != exclude_user_id)
         return query.all()
 
-    def create_user(self, username: str, phone: str, password_hash: str) -> UserORM:
-        new_user = UserORM(
+    def create_user(self, username: str, phone: str, password_hash: str, display_name: str = None) -> UserORM:
+        user = UserORM(
             id=str(uuid4()),
             username=username,
             phone=phone,
             password_hash=password_hash,
+            display_name=display_name or username,
             created_at=int(time.time())
         )
-        self.db.add(new_user)
+        self.db.add(user)
         self.db.commit()
-        self.db.refresh(new_user)
-        return new_user
+        self.db.refresh(user)
+        return user
 
-    def update_user(self, user_id: str, username: str = None, phone: str = None, avatar: str = None) -> UserORM | None:
-        user = self.get_by_id(user_id)
-        if user:
-            if username is not None:
-                user.username = username
-            if phone is not None:
-                user.phone = phone
-            if avatar is not None:
-                user.avatar = avatar
-            self.db.flush()
+    def update_user(
+        self, 
+        user_id: str, 
+        username: str = None, 
+        phone: str = None, 
+        avatar: str = None,
+        display_name: str = None,
+        email: str = None
+    ) -> UserORM | None:
+        user = self.db.query(UserORM).filter(UserORM.id == user_id).first()
+        if not user:
+            return None
+        
+        if username is not None:
+            user.username = username
+        
+        if phone is not None:
+            user.phone = phone
+        
+        if avatar is not None:
+            user.avatar = avatar
+        
+        if display_name is not None:
+            user.display_name = display_name
+        
+        if email is not None:
+            user.email = email
+        
+        self.db.commit()
+        self.db.refresh(user)
         return user
 
     def delete_user(self, user_id: str) -> bool:

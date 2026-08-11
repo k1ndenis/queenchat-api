@@ -38,8 +38,16 @@ def get_current_user(
         user = db.query(UserORM).filter(UserORM.id == user_id).first()
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
+        if user.is_blocked:
+            raise HTTPException(status_code=403, detail="Account is blocked")
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def require_admin(current_user: UserORM = Depends(get_current_user)) -> UserORM:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return current_user

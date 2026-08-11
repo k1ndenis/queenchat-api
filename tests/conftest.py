@@ -4,6 +4,9 @@ from unittest.mock import MagicMock, Mock, patch
 
 os.environ["TESTING"] = "true"
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+os.environ["DATABASE_URL"] = "sqlite:////tmp/queenchat-tests/database.db"
+os.environ["UPLOAD_ROOT"] = "/tmp/queenchat-tests/uploads"
+os.environ["JWT_SECRET_KEY"] = "queenchat-test-secret-at-least-32-bytes"
 os.environ["DB_HOST"] = "localhost"
 os.environ["DB_PORT"] = "5432"
 os.environ["DB_NAME"] = "test"
@@ -29,16 +32,17 @@ from app.core.websocket import manager
 from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.message_service import MessageService
-from app.services.notification_service import NotificationService
 from app.repositories.auth_repository import AuthRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.message_repository import MessageRepository
-from app.repositories.notification_repository import NotificationRepository
 
-DATABASE_URL = "sqlite:///./test.db"
+DATABASE_URL = os.environ["DATABASE_URL"]
+
+
 
 @pytest.fixture(scope="session")
 def engine():
+    os.makedirs("/tmp/queenchat-tests", exist_ok=True)
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -75,12 +79,12 @@ def client(db_session):
 def auth_client(client):
     response = client.post(
         "/api/auth/register",
-        json={"email": "test@example.com", "username": "testuser", "password": "123456"}
+        json={"phone": "+10000000001", "username": "testuser", "password": "123456"}
     )
     if response.status_code != 200:
         response = client.post(
             "/api/auth/login",
-            json={"email": "test@example.com", "password": "123456"}
+            json={"phone": "+10000000001", "password": "123456"}
         )
     token = response.cookies.get("access_token")
     client.cookies.set("access_token", token)
@@ -92,12 +96,12 @@ def second_user_client():
     client = TestClient(app)
     response = client.post(
         "/api/auth/register",
-        json={"email": "second@example.com", "username": "seconduser", "password": "123456"}
+        json={"phone": "+10000000002", "username": "seconduser", "password": "123456"}
     )
     if response.status_code != 200:
         response = client.post(
             "/api/auth/login",
-            json={"email": "second@example.com", "password": "123456"}
+            json={"phone": "+10000000002", "password": "123456"}
         )
     token = response.cookies.get("access_token")
     client.cookies.set("access_token", token)
@@ -116,9 +120,6 @@ def chat_repo(db_session):
 def message_repo(db_session):
     return MessageRepository(db_session)
 
-@pytest.fixture
-def notification_repo(db_session):
-    return NotificationRepository(db_session)
 
 @pytest.fixture
 def auth_service(db_session):
@@ -132,9 +133,6 @@ def chat_service(db_session):
 def message_service(db_session):
     return MessageService(db_session)
 
-@pytest.fixture
-def notification_service(db_session):
-    return NotificationService(db_session)
 
 @pytest.fixture
 def mock_db_session():

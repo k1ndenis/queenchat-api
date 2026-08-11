@@ -4,6 +4,8 @@ from app.models.chat import ChatResponse, ParticipantResponse
 import time
 from app.repositories.auth_repository import AuthRepository
 from app.core.redis import redis_cache
+from app.core.database import ReactionNotificationORM, MessageORM
+from sqlalchemy import func
 
 class ChatService:
     def __init__(self, db: Session):
@@ -12,12 +14,22 @@ class ChatService:
         self.auth_repo = AuthRepository(db)
 
     def get_user_chats(self, user_id: str):
-        cache_key = f"user_chats:{user_id}"
-        cached = redis_cache.get(cache_key)
-        if cached:
-            return [ChatResponse(**chat) for chat in cached]
-        
         chats = self.repo.get_user_chats(user_id)
+        reaction_counts = dict(self.db.query(
+            ReactionNotificationORM.chat_id,
+            func.count(ReactionNotificationORM.id),
+        ).filter(
+            ReactionNotificationORM.user_id == user_id,
+            ReactionNotificationORM.read_at.is_(None),
+        ).group_by(ReactionNotificationORM.chat_id).all())
+        message_counts = dict(self.db.query(
+            MessageORM.chat_id,
+            func.count(MessageORM.id),
+        ).filter(
+            MessageORM.chat_id.in_([chat.id for chat in chats]) if chats else False,
+            MessageORM.sender_id != user_id,
+            MessageORM.is_read == False,
+        ).group_by(MessageORM.chat_id).all()) if chats else {}
         result = []
         for chat in chats:
             participants = []
@@ -25,6 +37,7 @@ class ChatService:
                 participants.append(ParticipantResponse(
                     user_id=participant.id,
                     username=participant.username,
+                    display_name=participant.display_name,
                     avatar=participant.avatar if hasattr(participant, 'avatar') else None,
                     joined_at=chat.created_at
                 ))
@@ -37,10 +50,11 @@ class ChatService:
                 created_by=chat.created_by,
                 created_at=chat.created_at,
                 updated_at=chat.updated_at,
-                participants=participants
+                participants=participants,
+                unread_count=message_counts.get(chat.id, 0),
+                unread_reactions_count=reaction_counts.get(chat.id, 0),
+                has_unread_reactions=reaction_counts.get(chat.id, 0) > 0,
             ))
-        
-        redis_cache.set(cache_key, [chat.model_dump() for chat in result])
         return result
 
     def get_chat(self, chat_id: str) -> ChatResponse | None:
@@ -53,6 +67,7 @@ class ChatService:
             participants.append(ParticipantResponse(
                 user_id=participant.id,
                 username=participant.username,
+                display_name=participant.display_name,
                 avatar=participant.avatar if hasattr(participant, 'avatar') else None,
                 joined_at=chat.created_at
             ))
@@ -90,6 +105,7 @@ class ChatService:
             participants.append({
                 "user_id": user_id,
                 "username": user.username,
+                "display_name": user.display_name,
                 "avatar": user.avatar if hasattr(user, 'avatar') else None,
                 "joined_at": int(time.time())
             })
@@ -161,6 +177,7 @@ class ChatService:
             participants.append(ParticipantResponse(
                 user_id=participant.id,
                 username=participant.username,
+                display_name=participant.display_name,
                 avatar=participant.avatar if hasattr(participant, 'avatar') else None,
                 joined_at=chat.created_at
             ))
@@ -176,3 +193,37 @@ class ChatService:
             updated_at=chat.updated_at,
             participants=participants
         )
+
+    def get_existing_private_chat(self, user1_id: str, user2_id: str):
+        return self.repo.get_existing_private_chat(user1_id, user2_id)
+
+    def get_all_channels(self) -> list[ChatResponse]:
+        from app.core.database import ChatORM
+        channels = self.db.query(ChatORM).filter(
+            ChatORM.chat_type == "channel"
+        ).all()
+        
+        result = []
+        for chat in channels:
+            participants = []
+            for participant in chat.participants:
+                participants.append(ParticipantResponse(
+                    user_id=participant.id,
+                    username=participant.username,
+                    display_name=participant.display_name,
+                    avatar=participant.avatar if hasattr(participant, 'avatar') else None,
+                    joined_at=chat.created_at
+                ))
+            result.append(ChatResponse(
+                id=chat.id,
+                name=chat.name,
+                avatar=chat.avatar if hasattr(chat, 'avatar') else None,
+                chat_type=chat.chat_type,
+                is_group=chat.is_group,
+                created_by=chat.created_by,
+                created_at=chat.created_at,
+                updated_at=chat.updated_at,
+                participants=participants
+            ))
+        
+        return result

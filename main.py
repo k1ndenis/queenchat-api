@@ -7,6 +7,8 @@ from app.api.v1 import auth
 from app.api.v1 import chats
 from app.api.v1 import notifications
 from app.api.v1 import files
+from app.api.v1 import webrtc
+from app.api.v1 import admin
 from app.core.database import lifespan
 from app.core import firebase
 
@@ -29,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-uploads_path = Path("/app/uploads")
+uploads_path = files.UPLOAD_ROOT
 if uploads_path.exists():
     app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")
 
@@ -37,6 +39,8 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(chats.router, prefix="/api/chats", tags=["chats"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
+app.include_router(webrtc.router, prefix="/api/webrtc", tags=["webrtc"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 
 @app.get("/health")
 def health_check():

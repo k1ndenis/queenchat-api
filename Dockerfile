@@ -9,7 +9,7 @@ FROM python:3.14-slim AS production
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl ffmpeg && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/deps ./deps
 
@@ -20,4 +20,4 @@ COPY . .
 
 EXPOSE 3002
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3002"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 3002"]

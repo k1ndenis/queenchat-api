@@ -67,7 +67,7 @@ async def send_message(
                 "message": {
                     "id": message.id,
                     "sender_id": message.sender_id,
-                    "sender_name": current_user.username,
+                    "sender_name": current_user.display_name or current_user.username,
                     "content": message.content,
                     "created_at": message.created_at,
                     "chat_id": chat_id,
