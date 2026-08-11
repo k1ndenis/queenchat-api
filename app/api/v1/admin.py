@@ -24,7 +24,9 @@ from app.core.database import (
 from app.core.dependency import get_db, require_admin
 from app.core.redis import redis_cache
 from app.core.websocket import manager
-from app.core.rate_limit import ADMIN_MUTATION, ADMIN_READ, hit
+from app.core.rate_limit import (ADMIN_MUTATION, ADMIN_READ, COMMENT_EVENTS,
+    INVITE_CREATE, LOGIN_IP, MESSAGE_BURST, MESSAGE_SUSTAINED, REACTION_EVENTS,
+    REGISTER_IP_BURST, REGISTER_IP_HOUR, WS_EVENTS, hit)
 
 def _admin_read(admin: UserORM = Depends(require_admin)):
     hit(ADMIN_READ, admin.id)
@@ -38,7 +40,7 @@ def _admin_mutation(admin: UserORM = Depends(require_admin)):
 
 router = APIRouter(dependencies=[Depends(_admin_read)])
 MAX_PAGE_SIZE = 100
-AnalyticsPeriod = Literal["24h", "7d", "30d", "1y", "all"]
+AnalyticsPeriod = Literal["24h", "7d", "30d", "90d", "1y", "all", "custom"]
 
 
 class RoleRequest(BaseModel):
@@ -160,8 +162,8 @@ def _fixed_buckets(now: int, period: AnalyticsPeriod) -> tuple[list[int], int, s
     if period == "24h":
         size = 3600; end = (now // size + 1) * size
         return [end - size * offset for offset in range(24, 0, -1)], size, "hour"
-    if period in {"7d", "30d"}:
-        size = 86400; end = (now // size + 1) * size; count = 7 if period == "7d" else 30
+    if period in {"7d", "30d", "90d"}:
+        size = 86400; end = (now // size + 1) * size; count = {"7d": 7, "30d": 30, "90d": 90}[period]
         return [end - size * offset for offset in range(count, 0, -1)], size, "day"
     raise ValueError("Not a fixed period")
 
@@ -189,53 +191,49 @@ def _aggregate_months(db: Session, model, start: int, end: int) -> dict[int, int
 
 
 @router.get("/analytics")
-def analytics(period: AnalyticsPeriod = Query("7d"), db: Session = Depends(get_db)):
-    """UTC analytics with contiguous buckets and two grouped aggregate queries."""
+def analytics(period: AnalyticsPeriod = Query("7d"), date_from: Optional[int] = None, date_to: Optional[int] = None, db: Session = Depends(get_db)):
+    """UTC analytics, aggregated in SQL and returned with contiguous zero-filled buckets."""
     now = int(time.time())
-    if period == "1y":
+    models = {"registrations": UserORM, "messages": MessageORM, "chats": ChatORM, "uploads": FileORM}
+    if period == "custom":
+        if date_from is None or date_to is None or date_to <= date_from:
+            raise HTTPException(422, "custom analytics requires a valid date range")
+        span = date_to - date_from
+        if span > 366 * 86400:
+            raise HTTPException(422, "custom range is limited to 366 days")
+        size = 86400 if span <= 90 * 86400 else 7 * 86400
+        start = (date_from // size) * size; end = ((date_to // size) + 1) * size
+        starts = list(range(start, end, size)); granularity = "day" if size == 86400 else "week"
+        aggregates = {name: _aggregate_fixed(db, model, starts, size) for name, model in models.items()}
+    elif period == "1y":
         current = _utc_month_start(now)
         starts = [_add_months(current, offset) for offset in range(-11, 1)]
         end = _add_months(current, 1)
-        registrations = _aggregate_months(db, UserORM, starts[0], end)
-        messages = _aggregate_months(db, MessageORM, starts[0], end)
+        aggregates = {name: _aggregate_months(db, model, starts[0], end) for name, model in models.items()}
         granularity = "month"
     elif period == "all":
-        first_user = db.query(func.min(UserORM.created_at)).scalar()
-        first_message = db.query(func.min(MessageORM.created_at)).scalar()
-        first = min((value for value in (first_user, first_message) if value is not None), default=now)
-        age_days = max(1, (now - first) // 86400 + 1)
-        if age_days <= 36:
-            starts, size, granularity = _fixed_buckets(now, "30d")
-            starts = [starts[-1] - size * offset for offset in range(min(age_days, 36) - 1, -1, -1)]
-            registrations = _aggregate_fixed(db, UserORM, starts, size); messages = _aggregate_fixed(db, MessageORM, starts, size)
-        elif age_days <= 90:
-            size = 7 * 86400; end = (now // size + 1) * size; count = min(14, (age_days + 6) // 7)
-            starts = [end - size * offset for offset in range(count, 0, -1)]
-            registrations = _aggregate_fixed(db, UserORM, starts, size); messages = _aggregate_fixed(db, MessageORM, starts, size); granularity = "week"
-        else:
-            current = _utc_month_start(now); first_month = _utc_month_start(first)
-            months = (datetime.fromtimestamp(current, timezone.utc).year - datetime.fromtimestamp(first_month, timezone.utc).year) * 12 + datetime.fromtimestamp(current, timezone.utc).month - datetime.fromtimestamp(first_month, timezone.utc).month + 1
-            step = max(1, (months + 35) // 36)
-            raw_starts = [_add_months(first_month, offset) for offset in range(0, months, step)]
-            # Aggregate by calendar month then fold into <=36 wider month buckets in Python.
-            monthly_users = _aggregate_months(db, UserORM, first_month, _add_months(current, 1))
-            monthly_messages = _aggregate_months(db, MessageORM, first_month, _add_months(current, 1))
-            starts = raw_starts; end = _add_months(current, 1); registrations = {}; messages = {}
+        firsts = [db.query(func.min(model.created_at)).scalar() for model in models.values()]
+        first = min((value for value in firsts if value is not None), default=now)
+        first_month = _utc_month_start(first); current = _utc_month_start(now); end = _add_months(current, 1)
+        months = (datetime.fromtimestamp(current, timezone.utc).year - datetime.fromtimestamp(first_month, timezone.utc).year) * 12 + datetime.fromtimestamp(current, timezone.utc).month - datetime.fromtimestamp(first_month, timezone.utc).month + 1
+        # At most 36 monthly buckets: predictable cost for long-lived installations.
+        step = max(1, (months + 35) // 36); starts = [_add_months(first_month, offset) for offset in range(0, months, step)]
+        aggregates = {}
+        for name, model in models.items():
+            monthly = _aggregate_months(db, model, first_month, end); folded = {}
             for index, bucket_start in enumerate(starts):
                 bucket_end = starts[index + 1] if index + 1 < len(starts) else end
-                registrations[bucket_start] = sum(value for month, value in monthly_users.items() if bucket_start <= month < bucket_end)
-                messages[bucket_start] = sum(value for month, value in monthly_messages.items() if bucket_start <= month < bucket_end)
-            granularity = "month"
+                folded[bucket_start] = sum(value for month, value in monthly.items() if bucket_start <= month < bucket_end)
+            aggregates[name] = folded
+        granularity = "month"
     else:
         starts, size, granularity = _fixed_buckets(now, period)
-        registrations = _aggregate_fixed(db, UserORM, starts, size)
-        messages = _aggregate_fixed(db, MessageORM, starts, size)
+        aggregates = {name: _aggregate_fixed(db, model, starts, size) for name, model in models.items()}
         end = starts[-1] + size
 
-    points = [{"timestamp": start, "label": datetime.fromtimestamp(start, timezone.utc).isoformat(),
-               "registrations": registrations.get(start, 0), "messages": messages.get(start, 0)} for start in starts]
+    points = [{"timestamp": start, "label": datetime.fromtimestamp(start, timezone.utc).isoformat(), **{name: values.get(start, 0) for name, values in aggregates.items()}} for start in starts]
     return {"period": period, "granularity": granularity, "from": starts[0], "to": end,
-            "totals": {"registrations": sum(point["registrations"] for point in points), "messages": sum(point["messages"] for point in points)}, "points": points}
+            "totals": {name: sum(point[name] for point in points) for name in models}, "points": points}
 
 
 @router.get("/dashboard")
@@ -313,6 +311,14 @@ def get_user(user_id: str, db: Session = Depends(get_db)):
         "private_memberships": sum(chat.chat_type == "private" for chat in memberships),
         "group_memberships": sum(chat.chat_type == "group" for chat in memberships),
         "channel_memberships": sum(chat.chat_type == "channel" for chat in memberships),
+        "files_count": db.query(func.count(FileORM.id)).filter(FileORM.user_id == user.id).scalar() or 0,
+        "storage_bytes": int(db.query(func.coalesce(func.sum(FileORM.file_size), 0)).filter(FileORM.user_id == user.id).scalar() or 0),
+        "reactions_count": db.query(func.count(MessageReactionORM.id)).filter(MessageReactionORM.user_id == user.id).scalar() or 0,
+        "comments_count": db.query(func.count(MessageCommentORM.id)).filter(MessageCommentORM.user_id == user.id).scalar() or 0,
+        "invites_created": (db.query(func.count(PrivateChatInviteORM.id)).filter(PrivateChatInviteORM.creator_user_id == user.id).scalar() or 0) + (db.query(func.count(PrivateSpaceInviteORM.id)).filter(PrivateSpaceInviteORM.creator_user_id == user.id).scalar() or 0),
+        "spaces": db.query(func.count(PrivateSpaceSettingsORM.chat_id)).join(ChatParticipantORM, ChatParticipantORM.chat_id == PrivateSpaceSettingsORM.chat_id).filter(ChatParticipantORM.user_id == user.id).scalar() or 0,
+        "active_websocket_sessions": manager.connection_count(user.id),
+        "devices": {"available": False, "count": None},
         "chats": [{"id": chat.id, "type": chat.chat_type, "name": chat.name} for chat in memberships],
     })
     return result
@@ -327,10 +333,13 @@ def user_chats(user_id: str, page: int = 1, page_size: int = 30, db: Session = D
 
 
 @router.get("/users/{user_id}/messages")
-def user_messages(user_id: str, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+def user_messages(user_id: str, date_from: Optional[int] = None, date_to: Optional[int] = None, has_media: Optional[bool] = None, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
     page, page_size = _page(page, page_size)
     if not db.get(UserORM, user_id): raise HTTPException(404, "User not found")
     query = db.query(MessageORM).filter(MessageORM.sender_id == user_id)
+    if date_from is not None: query = query.filter(MessageORM.created_at >= date_from)
+    if date_to is not None: query = query.filter(MessageORM.created_at <= date_to)
+    if has_media is not None: query = query.filter(or_(MessageORM.media.is_not(None), MessageORM.images.is_not(None)) if has_media else MessageORM.media.is_(None), MessageORM.images.is_(None))
     return _page_result([_message_summary(db, row) for row in query.order_by(MessageORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()], page, page_size, query.count())
 
 
@@ -340,6 +349,21 @@ def user_files(user_id: str, page: int = 1, page_size: int = 30, db: Session = D
     if not db.get(UserORM, user_id): raise HTTPException(404, "User not found")
     query = db.query(FileORM).filter(FileORM.user_id == user_id)
     return _page_result([_file_summary(row) for row in query.order_by(FileORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()], page, page_size, query.count())
+
+
+@router.get("/users/{user_id}/audit")
+def user_admin_history(user_id: str, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size)
+    query = db.query(AdminAuditLogORM).filter(AdminAuditLogORM.target_type == "user", AdminAuditLogORM.target_id == user_id)
+    rows = query.order_by(AdminAuditLogORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return _page_result([{"id": row.id, "action": row.action, "created_at": row.created_at, "metadata": row.metadata_json} for row in rows], page, page_size, query.count())
+
+
+@router.get("/users/{user_id}/delete-impact")
+def user_delete_impact(user_id: str, db: Session = Depends(get_db)):
+    user = db.get(UserORM, user_id)
+    if not user: raise HTTPException(404, "User not found")
+    return {"username": user.username, "messages": db.query(func.count(MessageORM.id)).filter(MessageORM.sender_id == user.id).scalar() or 0, "chats": db.query(func.count(ChatParticipantORM.id)).filter(ChatParticipantORM.user_id == user.id).scalar() or 0, "files": db.query(func.count(FileORM.id)).filter(FileORM.user_id == user.id).scalar() or 0, "storage_bytes": int(db.query(func.coalesce(func.sum(FileORM.file_size), 0)).filter(FileORM.user_id == user.id).scalar() or 0), "invites": (db.query(func.count(PrivateChatInviteORM.id)).filter(PrivateChatInviteORM.creator_user_id == user.id).scalar() or 0) + (db.query(func.count(PrivateSpaceInviteORM.id)).filter(PrivateSpaceInviteORM.creator_user_id == user.id).scalar() or 0), "spaces": db.query(func.count(PrivateSpaceSettingsORM.chat_id)).join(ChatParticipantORM, ChatParticipantORM.chat_id == PrivateSpaceSettingsORM.chat_id).filter(ChatParticipantORM.user_id == user.id).scalar() or 0}
 
 
 @router.post("/users/{user_id}/block")
@@ -505,6 +529,38 @@ def storage_top_users(limit: int = 20, db: Session = Depends(get_db)):
     limit = min(max(limit, 1), 100)
     rows = db.query(UserORM.id, UserORM.username, UserORM.display_name, func.count(FileORM.id), func.coalesce(func.sum(FileORM.file_size), 0)).outerjoin(FileORM, FileORM.user_id == UserORM.id).group_by(UserORM.id, UserORM.username, UserORM.display_name).order_by(func.coalesce(func.sum(FileORM.file_size), 0).desc()).limit(limit).all()
     return {"items": [{"id": row[0], "username": row[1], "display_name": row[2], "files_count": row[3], "bytes": int(row[4] or 0)} for row in rows]}
+
+
+@router.get("/storage")
+def storage_overview(db: Session = Depends(get_db)):
+    now = int(time.time())
+    rows = db.query(FileORM.mime_type, func.count(FileORM.id), func.coalesce(func.sum(FileORM.file_size), 0)).group_by(FileORM.mime_type).all()
+    categories = {"images": {"files": 0, "bytes": 0}, "voice": {"files": 0, "bytes": 0}, "video": {"files": 0, "bytes": 0}, "other": {"files": 0, "bytes": 0}}
+    for mime, count, size in rows:
+        key = "images" if (mime or "").startswith("image/") else "voice" if (mime or "").startswith("audio/") else "video" if (mime or "").startswith("video/") else "other"
+        categories[key]["files"] += int(count or 0); categories[key]["bytes"] += int(size or 0)
+    usage = shutil.disk_usage(os.getenv("UPLOAD_ROOT", "/app/uploads"))
+    uploads = {label: {"files": int(db.query(func.count(FileORM.id)).filter(FileORM.created_at >= since).scalar() or 0), "bytes": int(db.query(func.coalesce(func.sum(FileORM.file_size), 0)).filter(FileORM.created_at >= since).scalar() or 0)} for label, since in {"today": now - 86400, "7d": now - 7 * 86400, "30d": now - 30 * 86400}.items()}
+    chats = db.query(ChatORM.id, ChatORM.name, ChatORM.chat_type, func.count(FileORM.id), func.coalesce(func.sum(FileORM.file_size), 0)).join(FileORM, FileORM.chat_id == ChatORM.id).group_by(ChatORM.id, ChatORM.name, ChatORM.chat_type).order_by(func.coalesce(func.sum(FileORM.file_size), 0).desc()).limit(20).all()
+    threshold = int(os.getenv("UPLOAD_DISK_USAGE_THRESHOLD_PERCENT", "90"))
+    return {"categories": categories, "total": {"files": sum(value["files"] for value in categories.values()), "bytes": sum(value["bytes"] for value in categories.values())}, "uploads": uploads, "disk": {"total": usage.total, "free": usage.free, "used": usage.used, "percent": round(usage.used * 100 / usage.total, 1), "reject_threshold_percent": threshold}, "top_chats": [{"id": row[0], "name": row[1], "type": row[2], "files_count": int(row[3]), "bytes": int(row[4])} for row in chats]}
+
+
+@router.get("/security")
+def security_overview():
+    """Only current Redis limiter keys; no raw IPs/subjects and no fake history."""
+    limits = [LOGIN_IP, REGISTER_IP_BURST, REGISTER_IP_HOUR, MESSAGE_BURST, MESSAGE_SUSTAINED, REACTION_EVENTS, COMMENT_EVENTS, INVITE_CREATE, WS_EVENTS]
+    active = {limit.name: 0 for limit in limits}
+    try:
+        for key in redis_cache.redis_client.scan_iter("queenchat:rl:*"):
+            name = key.decode() if isinstance(key, bytes) else str(key)
+            for limit in limits:
+                if name.startswith(f"queenchat:rl:{limit.name}:"):
+                    active[limit.name] += 1; break
+        redis_healthy = True
+    except Exception:
+        redis_healthy = False
+    return {"source": "current Redis fixed-window keys; counters expire with their policy window", "redis_healthy": redis_healthy, "active_subject_windows": active, "policies": [{"name": limit.name, "maximum": limit.maximum, "window_seconds": limit.window_seconds} for limit in limits]}
 
 
 @router.get("/invites")

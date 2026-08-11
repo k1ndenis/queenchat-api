@@ -103,3 +103,17 @@ def test_user_delete_requires_target_username(auth_client, db_session):
     response = auth_client.request("DELETE", "/api/admin/users/delete-confirm-target", json={"username": "wrong-user"})
     assert response.status_code == 400
     assert db_session.get(UserORM, "delete-confirm-target") is not None
+
+
+def test_admin_extended_analytics_storage_security_and_custom_range(auth_client, db_session):
+    make_admin(db_session, auth_client.user_id)
+    now = int(time.time())
+    response = auth_client.get("/api/admin/analytics?period=90d")
+    assert response.status_code == 200 and len(response.json()["points"]) == 90
+    custom = auth_client.get(f"/api/admin/analytics?period=custom&date_from={now - 3 * 86400}&date_to={now}")
+    assert custom.status_code == 200 and custom.json()["granularity"] == "day"
+    assert auth_client.get(f"/api/admin/analytics?period=custom&date_from=1&date_to={400 * 86400}").status_code == 422
+    storage = auth_client.get("/api/admin/storage")
+    assert storage.status_code == 200 and "disk" in storage.json() and "file_path" not in str(storage.json())
+    security = auth_client.get("/api/admin/security")
+    assert security.status_code == 200 and any(policy["name"] == "login-ip" for policy in security.json()["policies"])
