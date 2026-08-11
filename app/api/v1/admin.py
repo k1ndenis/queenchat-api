@@ -49,6 +49,10 @@ class ConfirmationRequest(BaseModel):
     confirmation: str = Field(pattern="^DELETE$")
 
 
+class UserDeleteRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+
+
 class BlockRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
 
@@ -374,10 +378,12 @@ def change_role(user_id: str, payload: RoleRequest, admin: UserORM = Depends(_ad
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, payload: ConfirmationRequest, admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
+async def delete_user(user_id: str, payload: UserDeleteRequest, admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
     if user_id == admin.id: raise HTTPException(400, "You cannot delete yourself")
     user = db.get(UserORM, user_id)
     if not user: raise HTTPException(404, "User not found")
+    if payload.username != user.username:
+        raise HTTPException(400, "Enter the target username to confirm deletion")
     if user.role == "admin" and (db.query(func.count(UserORM.id)).filter(UserORM.role == "admin").scalar() or 0) <= 1:
         raise HTTPException(400, "Cannot delete the last administrator")
     try:

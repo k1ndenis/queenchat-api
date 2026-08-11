@@ -64,7 +64,7 @@ def test_admin_dashboard_and_user_controls(auth_client, db_session):
 def test_last_admin_and_self_delete_are_protected(auth_client, db_session):
     make_admin(db_session, auth_client.user_id)
     assert auth_client.patch(f"/api/admin/users/{auth_client.user_id}/role", json={"role": "user"}).status_code == 400
-    assert auth_client.request("DELETE", f"/api/admin/users/{auth_client.user_id}", json={"confirmation": "DELETE"}).status_code == 400
+    assert auth_client.request("DELETE", f"/api/admin/users/{auth_client.user_id}", json={"username": "testuser"}).status_code == 400
 
 
 def test_chat_delete_and_pagination_bound(auth_client, db_session):
@@ -94,3 +94,12 @@ def test_admin_operational_lists_are_paged_and_hide_invite_tokens(auth_client, d
     assert auth_client.get("/api/admin/messages?page_size=101").json()["page_size"] == 100
     assert auth_client.get("/api/admin/files?page_size=10").status_code == 200
     assert auth_client.get("/api/admin/realtime").status_code == 200
+
+
+def test_user_delete_requires_target_username(auth_client, db_session):
+    make_admin(db_session, auth_client.user_id)
+    target = UserORM(id="delete-confirm-target", username="target-confirm", phone="+10000000077", password_hash="x", display_name="Target", created_at=int(time.time()))
+    db_session.add(target); db_session.commit()
+    response = auth_client.request("DELETE", "/api/admin/users/delete-confirm-target", json={"username": "wrong-user"})
+    assert response.status_code == 400
+    assert db_session.get(UserORM, "delete-confirm-target") is not None
