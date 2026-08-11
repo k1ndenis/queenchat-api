@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 import uuid
 import time
 from app.core.database import ChatORM, ChatParticipantORM, MessageORM, MessageReactionORM
@@ -9,19 +9,14 @@ class ChatRepository:
         self.db = db
 
     def get_existing_private_chat(self, user1_id: str, user2_id: str) -> ChatORM | None:
-        chat_ids = self.db.query(ChatParticipantORM.chat_id).filter(
-            ChatParticipantORM.user_id.in_([user1_id, user2_id])
-        ).group_by(ChatParticipantORM.chat_id).having(
-            func.count(ChatParticipantORM.user_id) == 2
-        ).all()
-        
-        if not chat_ids:
-            return None
-        
-        return self.db.query(ChatORM).filter(
-            ChatORM.id.in_([c[0] for c in chat_ids]),
-            ChatORM.chat_type == "private",
-            ChatORM.is_group == False
+        # A pair space must never attach to a malformed/multi-user private
+        # chat.  Require exactly two memberships and both requested users.
+        return self.db.query(ChatORM).join(ChatParticipantORM).filter(
+            ChatORM.chat_type == "private", ChatORM.is_group == False
+        ).group_by(ChatORM.id).having(
+            func.count(ChatParticipantORM.id) == 2
+        ).having(
+            func.sum(case((ChatParticipantORM.user_id.in_([user1_id, user2_id]), 1), else_=0)) == 2
         ).first()
 
     def create_chat(self, name: str, is_group: bool, created_by: str, chat_type: str) -> ChatORM:

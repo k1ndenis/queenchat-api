@@ -9,6 +9,7 @@ from app.api.v1 import notifications
 from app.api.v1 import files
 from app.api.v1 import webrtc
 from app.api.v1 import admin
+from app.api.v1 import spaces
 from app.core.database import lifespan
 from app.core import firebase
 
@@ -41,6 +42,7 @@ app.include_router(notifications.router, prefix="/api/notifications", tags=["not
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(webrtc.router, prefix="/api/webrtc", tags=["webrtc"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(spaces.router, prefix="/api/spaces", tags=["spaces"])
 
 @app.get("/health")
 def health_check():

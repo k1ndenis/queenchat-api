@@ -108,6 +108,65 @@ class ChatBackgroundPreferenceORM(Base):
     updated_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
 
+class PrivateSpaceSettingsORM(Base):
+    __tablename__ = "private_space_settings"
+    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    title: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    theme: Mapped[str] = mapped_column(String(24), nullable=False, default="queen", server_default="queen")
+    accent: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    cover_image: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
+
+
+class PrivateSpaceInviteORM(Base):
+    __tablename__ = "private_space_invites"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    creator_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    chat_id: Mapped[Optional[str]] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), index=True, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
+    expires_at: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    accepted_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    accepted_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    revoked_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+class SpaceMemoryORM(Base):
+    __tablename__ = "space_memories"
+    __table_args__ = (UniqueConstraint("chat_id", "message_id", name="uq_space_memories_chat_message"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True, nullable=False)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True, nullable=False)
+    saved_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
+
+
+class SpaceDateORM(Base):
+    __tablename__ = "space_dates"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    event_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
+
+
+class SpaceNoteORM(Base):
+    __tablename__ = "space_notes"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    note_type: Mapped[str] = mapped_column(String(12), nullable=False, default="note", server_default="note")
+    due_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False, default=lambda: int(time.time()))
+
+
 class MessageORM(Base):
     __tablename__ = "messages"
     
