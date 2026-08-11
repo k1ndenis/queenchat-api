@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Literal, Optional
@@ -17,13 +18,25 @@ from app.api.v1.notifications import delete_fcm_token
 from app.core.database import (
     AdminAuditLogORM, ChatBackgroundPreferenceORM, ChatORM, ChatParticipantORM,
     FileORM, MessageCommentORM, MessageORM, MessageReactionORM,
-    ReactionNotificationORM, UserORM,
+    PrivateChatInviteORM, PrivateSpaceInviteORM, PrivateSpaceSettingsORM,
+    ReactionNotificationORM, SpaceMemoryORM, SpaceDateORM, SpaceNoteORM, UserORM,
 )
 from app.core.dependency import get_db, require_admin
 from app.core.redis import redis_cache
 from app.core.websocket import manager
+from app.core.rate_limit import ADMIN_MUTATION, ADMIN_READ, hit
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+def _admin_read(admin: UserORM = Depends(require_admin)):
+    hit(ADMIN_READ, admin.id)
+    return admin
+
+
+def _admin_mutation(admin: UserORM = Depends(require_admin)):
+    hit(ADMIN_MUTATION, admin.id)
+    return admin
+
+
+router = APIRouter(dependencies=[Depends(_admin_read)])
 MAX_PAGE_SIZE = 100
 AnalyticsPeriod = Literal["24h", "7d", "30d", "1y", "all"]
 
@@ -66,11 +79,15 @@ def _user_summary(db: Session, user: UserORM) -> dict:
 
 
 def _chat_summary(db: Session, chat: ChatORM) -> dict:
+    last_activity = db.query(func.max(MessageORM.created_at)).filter(MessageORM.chat_id == chat.id).scalar()
+    space = db.get(PrivateSpaceSettingsORM, chat.id)
     return {
         "id": chat.id, "type": chat.chat_type, "name": chat.name, "avatar": chat.avatar,
         "created_at": chat.created_at, "created_by": chat.created_by,
         "participants_count": db.query(func.count(ChatParticipantORM.id)).filter(ChatParticipantORM.chat_id == chat.id).scalar() or 0,
         "messages_count": db.query(func.count(MessageORM.id)).filter(MessageORM.chat_id == chat.id).scalar() or 0,
+        "last_activity": last_activity,
+        "space_status": space.status if space else None,
     }
 
 
@@ -224,6 +241,16 @@ def dashboard(db: Session = Depends(get_db)):
     blocked = db.query(func.count(UserORM.id)).filter(UserORM.is_blocked.is_(True)).scalar() or 0
     chats = db.query(ChatORM.chat_type, func.count(ChatORM.id)).group_by(ChatORM.chat_type).all()
     chat_counts = dict(chats)
+    file_count, file_bytes = db.query(func.count(FileORM.id), func.coalesce(func.sum(FileORM.file_size), 0)).one()
+    invite_rows = list(db.query(PrivateChatInviteORM.accepted_at, PrivateChatInviteORM.revoked_at, PrivateChatInviteORM.expires_at).all()) + list(db.query(PrivateSpaceInviteORM.accepted_at, PrivateSpaceInviteORM.revoked_at, PrivateSpaceInviteORM.expires_at).all())
+    invite_counts = {"active": 0, "accepted": 0, "expired": 0, "revoked": 0}
+    for accepted_at, revoked_at, expires_at in invite_rows:
+        invite_counts["revoked" if revoked_at else "accepted" if accepted_at else "expired" if expires_at <= now else "active"] += 1
+    usage = shutil.disk_usage(os.getenv("UPLOAD_ROOT", "/app/uploads"))
+    try: redis_healthy = bool(redis_cache.redis_client.ping())
+    except Exception: redis_healthy = False
+    active_users = set(manager.global_connections)
+    for users in manager.active_connections.values(): active_users.update(users)
     return {
         "users_total": total, "users_active": total - blocked, "users_blocked": blocked,
         "users_registered_today": db.query(func.count(UserORM.id)).filter(UserORM.created_at >= day).scalar() or 0,
@@ -233,7 +260,25 @@ def dashboard(db: Session = Depends(get_db)):
         "messages_total": db.query(func.count(MessageORM.id)).scalar() or 0,
         "messages_today": db.query(func.count(MessageORM.id)).filter(MessageORM.created_at >= day).scalar() or 0,
         "messages_7d": db.query(func.count(MessageORM.id)).filter(MessageORM.created_at >= now - 7 * 86400).scalar() or 0,
+        "messages_30d": db.query(func.count(MessageORM.id)).filter(MessageORM.created_at >= now - 30 * 86400).scalar() or 0,
+        "media": {"files": int(file_count or 0), "bytes": int(file_bytes or 0)},
+        "invites": invite_counts,
+        "spaces": {"active": db.query(func.count(PrivateSpaceSettingsORM.chat_id)).filter(PrivateSpaceSettingsORM.status == "active").scalar() or 0, "pending": db.query(func.count(PrivateSpaceSettingsORM.chat_id)).filter(PrivateSpaceSettingsORM.status == "pending").scalar() or 0},
+        "realtime": {"websocket_connections": sum(len(x) for x in manager.global_connections.values()) + sum(len(sockets) for users in manager.active_connections.values() for sockets in users.values()), "websocket_users": len(active_users)},
+        "system": {"disk_total": usage.total, "disk_free": usage.free, "uploads_path": "configured", "redis": redis_healthy, "database": True},
     }
+
+
+def _page_result(items: list[dict], page: int, page_size: int, total: int) -> dict:
+    return {"items": items, "page": page, "page_size": page_size, "total": total}
+
+
+def _message_summary(db: Session, message: MessageORM, include_content: bool = False) -> dict:
+    return {"id": message.id, "chat_id": message.chat_id, "sender": {"id": message.sender.id, "username": message.sender.username, "display_name": message.sender.display_name, "avatar": message.sender.avatar}, "created_at": message.created_at, "edited_at": message.edited_at, "deleted_at": message.deleted_at, "content": message.content if include_content else (message.content or "")[:240], "is_sticker": message.is_sticker, "is_image": message.is_image, "has_media": bool(message.media or message.images), "reply_to_id": message.reply_to_id, "reactions_count": db.query(func.count(MessageReactionORM.id)).filter(MessageReactionORM.message_id == message.id).scalar() or 0, "comments_count": db.query(func.count(MessageCommentORM.id)).filter(MessageCommentORM.message_id == message.id, MessageCommentORM.deleted_at.is_(None)).scalar() or 0}
+
+
+def _file_summary(file: FileORM) -> dict:
+    return {"id": file.id, "filename": file.filename, "original_name": file.original_name, "mime_type": file.mime_type, "file_size": file.file_size, "user_id": file.user_id, "chat_id": file.chat_id, "created_at": file.created_at}
 
 
 @router.get("/users")
@@ -269,8 +314,32 @@ def get_user(user_id: str, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/users/{user_id}/chats")
+def user_chats(user_id: str, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size)
+    if not db.get(UserORM, user_id): raise HTTPException(404, "User not found")
+    query = db.query(ChatORM).join(ChatParticipantORM).filter(ChatParticipantORM.user_id == user_id)
+    return _page_result([_chat_summary(db, chat) for chat in query.order_by(ChatORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()], page, page_size, query.count())
+
+
+@router.get("/users/{user_id}/messages")
+def user_messages(user_id: str, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size)
+    if not db.get(UserORM, user_id): raise HTTPException(404, "User not found")
+    query = db.query(MessageORM).filter(MessageORM.sender_id == user_id)
+    return _page_result([_message_summary(db, row) for row in query.order_by(MessageORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()], page, page_size, query.count())
+
+
+@router.get("/users/{user_id}/files")
+def user_files(user_id: str, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size)
+    if not db.get(UserORM, user_id): raise HTTPException(404, "User not found")
+    query = db.query(FileORM).filter(FileORM.user_id == user_id)
+    return _page_result([_file_summary(row) for row in query.order_by(FileORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()], page, page_size, query.count())
+
+
 @router.post("/users/{user_id}/block")
-async def block_user(user_id: str, payload: BlockRequest = BlockRequest(), admin: UserORM = Depends(require_admin), db: Session = Depends(get_db)):
+async def block_user(user_id: str, payload: BlockRequest = BlockRequest(), admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
     if user_id == admin.id: raise HTTPException(400, "You cannot block yourself")
     user = db.get(UserORM, user_id)
     if not user: raise HTTPException(404, "User not found")
@@ -282,7 +351,7 @@ async def block_user(user_id: str, payload: BlockRequest = BlockRequest(), admin
 
 
 @router.post("/users/{user_id}/unblock")
-def unblock_user(user_id: str, admin: UserORM = Depends(require_admin), db: Session = Depends(get_db)):
+def unblock_user(user_id: str, admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
     user = db.get(UserORM, user_id)
     if not user: raise HTTPException(404, "User not found")
     if user.is_blocked:
@@ -292,7 +361,7 @@ def unblock_user(user_id: str, admin: UserORM = Depends(require_admin), db: Sess
 
 
 @router.patch("/users/{user_id}/role")
-def change_role(user_id: str, payload: RoleRequest, admin: UserORM = Depends(require_admin), db: Session = Depends(get_db)):
+def change_role(user_id: str, payload: RoleRequest, admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
     user = db.get(UserORM, user_id)
     if not user: raise HTTPException(404, "User not found")
     if user.role == "admin" and payload.role != "admin":
@@ -305,7 +374,7 @@ def change_role(user_id: str, payload: RoleRequest, admin: UserORM = Depends(req
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, payload: ConfirmationRequest, admin: UserORM = Depends(require_admin), db: Session = Depends(get_db)):
+async def delete_user(user_id: str, payload: ConfirmationRequest, admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
     if user_id == admin.id: raise HTTPException(400, "You cannot delete yourself")
     user = db.get(UserORM, user_id)
     if not user: raise HTTPException(404, "User not found")
@@ -344,13 +413,22 @@ def get_chat(chat_id: str, db: Session = Depends(get_db)):
     chat = db.get(ChatORM, chat_id)
     if not chat: raise HTTPException(404, "Chat not found")
     result = _chat_summary(db, chat)
-    result["participants"] = [{"id": user.id, "username": user.username, "display_name": user.display_name, "avatar": user.avatar} for user in chat.participants]
+    result["participants"] = [{"id": user.id, "username": user.username, "display_name": user.display_name, "avatar": user.avatar, "joined_at": participant.joined_at} for participant in db.query(ChatParticipantORM).filter(ChatParticipantORM.chat_id == chat.id).all() for user in [db.get(UserORM, participant.user_id)] if user]
     return result
 
 
+@router.get("/chats/{chat_id}/messages")
+def chat_messages(chat_id: str, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size)
+    if not db.get(ChatORM, chat_id): raise HTTPException(404, "Chat not found")
+    query = db.query(MessageORM).filter(MessageORM.chat_id == chat_id)
+    return _page_result([_message_summary(db, row) for row in query.order_by(MessageORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()], page, page_size, query.count())
+
+
 @router.delete("/chats/{chat_id}")
-def delete_chat(chat_id: str, payload: ConfirmationRequest, admin: UserORM = Depends(require_admin), db: Session = Depends(get_db)):
+def delete_chat(chat_id: str, payload: ConfirmationRequest, admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
     chat = db.get(ChatORM, chat_id)
+    if chat and chat.chat_type == "private": raise HTTPException(400, "Private chats require account-level moderation")
     if not chat: raise HTTPException(404, "Chat not found")
     try:
         _delete_chat_records(db, chat); _audit(db, admin, "CHAT_DELETE", "chat", chat_id); db.commit()
@@ -368,7 +446,7 @@ def list_participants(chat_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/chats/{chat_id}/participants/{user_id}")
-def remove_participant(chat_id: str, user_id: str, admin: UserORM = Depends(require_admin), db: Session = Depends(get_db)):
+def remove_participant(chat_id: str, user_id: str, admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
     chat = db.get(ChatORM, chat_id)
     if not chat: raise HTTPException(404, "Chat not found")
     if chat.chat_type == "private": raise HTTPException(400, "Private chat participants cannot be managed")
@@ -376,6 +454,102 @@ def remove_participant(chat_id: str, user_id: str, admin: UserORM = Depends(requ
     if not participant: raise HTTPException(404, "Participant not found")
     db.delete(participant); _audit(db, admin, "PARTICIPANT_REMOVE", "chat", chat_id, {"user_id": user_id}); db.commit()
     return {"status": "removed"}
+
+
+@router.get("/messages")
+def list_messages(user_id: Optional[str] = None, chat_id: Optional[str] = None, q: str = "", media: Optional[bool] = None, deleted: Optional[bool] = None, date_from: Optional[int] = None, date_to: Optional[int] = None, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size); query = db.query(MessageORM)
+    if user_id: query = query.filter(MessageORM.sender_id == user_id)
+    if chat_id: query = query.filter(MessageORM.chat_id == chat_id)
+    if q.strip(): query = query.filter(MessageORM.content.ilike(f"%{q.strip()[:120]}%"))
+    if media is True: query = query.filter(or_(MessageORM.media.is_not(None), MessageORM.images.is_not(None)))
+    if deleted is not None: query = query.filter(MessageORM.deleted_at.is_not(None) if deleted else MessageORM.deleted_at.is_(None))
+    if date_from is not None: query = query.filter(MessageORM.created_at >= date_from)
+    if date_to is not None: query = query.filter(MessageORM.created_at <= date_to)
+    total = query.count(); rows = query.order_by(MessageORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return _page_result([_message_summary(db, row) for row in rows], page, page_size, total)
+
+
+@router.get("/messages/{message_id}")
+def get_message(message_id: str, db: Session = Depends(get_db)):
+    message = db.get(MessageORM, message_id)
+    if not message: raise HTTPException(404, "Message not found")
+    result = _message_summary(db, message, include_content=True)
+    result["images"] = message.images
+    result["media"] = message.media
+    result["reactions"] = [{"emoji": row.emoji, "user": {"id": row.user.id, "username": row.user.username, "display_name": row.user.display_name}} for row in db.query(MessageReactionORM).filter(MessageReactionORM.message_id == message.id).all()]
+    result["comments"] = [{"id": row.id, "content": row.content, "created_at": row.created_at, "deleted_at": row.deleted_at, "user": {"id": row.user.id, "username": row.user.username, "display_name": row.user.display_name}} for row in db.query(MessageCommentORM).filter(MessageCommentORM.message_id == message.id).all()]
+    return result
+
+
+@router.get("/files")
+def list_files(user_id: Optional[str] = None, mime_prefix: str = "", date_from: Optional[int] = None, date_to: Optional[int] = None, min_size: Optional[int] = None, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size); query = db.query(FileORM)
+    if user_id: query = query.filter(FileORM.user_id == user_id)
+    if mime_prefix: query = query.filter(FileORM.mime_type.ilike(f"{mime_prefix[:80]}%"))
+    if date_from is not None: query = query.filter(FileORM.created_at >= date_from)
+    if date_to is not None: query = query.filter(FileORM.created_at <= date_to)
+    if min_size is not None: query = query.filter(FileORM.file_size >= min_size)
+    total = query.count(); rows = query.order_by(FileORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return _page_result([_file_summary(row) for row in rows], page, page_size, total)
+
+
+@router.get("/storage/top-users")
+def storage_top_users(limit: int = 20, db: Session = Depends(get_db)):
+    limit = min(max(limit, 1), 100)
+    rows = db.query(UserORM.id, UserORM.username, UserORM.display_name, func.count(FileORM.id), func.coalesce(func.sum(FileORM.file_size), 0)).outerjoin(FileORM, FileORM.user_id == UserORM.id).group_by(UserORM.id, UserORM.username, UserORM.display_name).order_by(func.coalesce(func.sum(FileORM.file_size), 0).desc()).limit(limit).all()
+    return {"items": [{"id": row[0], "username": row[1], "display_name": row[2], "files_count": row[3], "bytes": int(row[4] or 0)} for row in rows]}
+
+
+def _invite_payload(invite, kind: str, now: int) -> dict:
+    status = "revoked" if invite.revoked_at else "accepted" if invite.accepted_at else "expired" if invite.expires_at <= now else "active"
+    return {"id": invite.id, "kind": kind, "creator_user_id": invite.creator_user_id, "recipient_user_id": getattr(invite, "recipient_user_id", None), "chat_id": getattr(invite, "chat_id", None), "created_at": invite.created_at, "expires_at": invite.expires_at, "accepted_at": invite.accepted_at, "accepted_by_user_id": invite.accepted_by_user_id, "revoked_at": invite.revoked_at, "status": status}
+
+
+@router.get("/invites")
+def list_invites(status: Optional[Literal["active", "accepted", "expired", "revoked"]] = None, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size); now = int(time.time())
+    rows = [_invite_payload(row, "private_chat", now) for row in db.query(PrivateChatInviteORM).all()] + [_invite_payload(row, "space", now) for row in db.query(PrivateSpaceInviteORM).all()]
+    if status: rows = [row for row in rows if row["status"] == status]
+    rows.sort(key=lambda row: row["created_at"], reverse=True)
+    return _page_result(rows[(page - 1) * page_size:page * page_size], page, page_size, len(rows))
+
+
+@router.get("/spaces")
+def list_spaces(status: Optional[Literal["active", "pending"]] = None, page: int = 1, page_size: int = 30, db: Session = Depends(get_db)):
+    page, page_size = _page(page, page_size); query = db.query(PrivateSpaceSettingsORM)
+    if status: query = query.filter(PrivateSpaceSettingsORM.status == status)
+    total = query.count(); rows = query.order_by(PrivateSpaceSettingsORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return _page_result([{"chat_id": row.chat_id, "status": row.status, "title": row.title, "created_at": row.created_at, "updated_at": row.updated_at, "saved_count": db.query(func.count(SpaceMemoryORM.id)).filter(SpaceMemoryORM.chat_id == row.chat_id).scalar() or 0, "dates_count": db.query(func.count(SpaceDateORM.id)).filter(SpaceDateORM.chat_id == row.chat_id).scalar() or 0, "notes_count": db.query(func.count(SpaceNoteORM.id)).filter(SpaceNoteORM.chat_id == row.chat_id).scalar() or 0} for row in rows], page, page_size, total)
+
+
+@router.get("/realtime")
+def realtime_state():
+    users = set(manager.global_connections)
+    for by_user in manager.active_connections.values(): users.update(by_user)
+    return {"websocket_users": len(users), "websocket_connections": sum(len(sockets) for sockets in manager.global_connections.values()) + sum(len(sockets) for by_user in manager.active_connections.values() for sockets in by_user.values()), "users": [{"user_id": user_id, "sockets": manager.connection_count(user_id)} for user_id in sorted(users)]}
+
+
+@router.get("/search")
+def admin_search(q: str, limit: int = 10, db: Session = Depends(get_db)):
+    term = q.strip()
+    if len(term) < 2: return {"users": [], "chats": [], "messages": []}
+    limit = min(max(limit, 1), 30); like = f"%{term[:100]}%"
+    users = db.query(UserORM).filter(or_(UserORM.id.ilike(like), UserORM.username.ilike(like), UserORM.display_name.ilike(like), UserORM.phone.ilike(like), UserORM.email.ilike(like))).limit(limit).all()
+    chats = db.query(ChatORM).filter(or_(ChatORM.id.ilike(like), ChatORM.name.ilike(like))).limit(limit).all()
+    # Deliberately no full-content message search in type-ahead.
+    messages = db.query(MessageORM).filter(MessageORM.id.ilike(like)).limit(limit).all()
+    return {"users": [_user_summary(db, row) for row in users], "chats": [_chat_summary(db, row) for row in chats], "messages": [{"id": row.id, "chat_id": row.chat_id, "created_at": row.created_at} for row in messages]}
+
+
+@router.post("/invites/{kind}/{invite_id}/revoke")
+def revoke_invite(kind: Literal["private_chat", "space"], invite_id: str, admin: UserORM = Depends(_admin_mutation), db: Session = Depends(get_db)):
+    model = PrivateChatInviteORM if kind == "private_chat" else PrivateSpaceInviteORM
+    invite = db.get(model, invite_id)
+    if not invite: raise HTTPException(404, "Invitation not found")
+    if invite.accepted_at or invite.revoked_at or invite.expires_at <= int(time.time()): raise HTTPException(409, "Only active invitations can be revoked")
+    invite.revoked_at = int(time.time()); _audit(db, admin, "INVITE_REVOKE", "invite", invite.id, {"kind": kind}); db.commit()
+    return {"status": "revoked", "id": invite.id}
 
 
 @router.get("/audit")

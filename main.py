@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -21,6 +21,14 @@ app = FastAPI(
     lifespan=lifespan,
     redirect_slashes=False
 )
+
+@app.middleware("http")
+async def protect_admin_responses(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/admin/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+    return response
 
 app.add_middleware(
     CORSMiddleware,
