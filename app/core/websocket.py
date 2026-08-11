@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 import jwt
 import os
 import logging
+from app.core.telemetry import WS_CONNECTIONS, WS_CONNECTIONS_TOTAL, WS_DISCONNECTS_TOTAL
 
 from app.core.dependency import get_db
 
@@ -24,6 +25,8 @@ class ConnectionManager:
         if user_id not in self.active_connections[chat_id]:
             self.active_connections[chat_id][user_id] = set()
         self.active_connections[chat_id][user_id].add(websocket)
+        WS_CONNECTIONS.labels("chat").inc()
+        WS_CONNECTIONS_TOTAL.labels("chat").inc()
 
     def connection_count(self, user_id: str) -> int:
         return len(self.global_connections.get(user_id, set())) + sum(
@@ -31,6 +34,7 @@ class ConnectionManager:
         )
 
     def disconnect(self, chat_id: str, user_id: str, websocket: WebSocket | None = None):
+        removed = chat_id in self.active_connections and user_id in self.active_connections[chat_id]
         if chat_id in self.active_connections:
             if user_id in self.active_connections[chat_id]:
                 if websocket is None:
@@ -41,6 +45,9 @@ class ConnectionManager:
                         self.active_connections[chat_id].pop(user_id, None)
             if not self.active_connections[chat_id]:
                 del self.active_connections[chat_id]
+        if removed:
+            WS_CONNECTIONS.labels("chat").dec()
+            WS_DISCONNECTS_TOTAL.labels("chat").inc()
 
     async def send_personal_message(self, message: dict, chat_id: str, user_id: str):
         if chat_id in self.active_connections:
@@ -78,8 +85,11 @@ class ConnectionManager:
         if user_id not in self.global_connections:
             self.global_connections[user_id] = set()
         self.global_connections[user_id].add(websocket)
+        WS_CONNECTIONS.labels("global").inc()
+        WS_CONNECTIONS_TOTAL.labels("global").inc()
 
     def disconnect_global(self, user_id: str, websocket: WebSocket | None = None):
+        removed = user_id in self.global_connections
         """Удаляет глобальное WebSocket соединение"""
         if user_id in self.global_connections:
             if websocket is None:
@@ -88,6 +98,9 @@ class ConnectionManager:
                 self.global_connections[user_id].discard(websocket)
                 if not self.global_connections[user_id]:
                     del self.global_connections[user_id]
+        if removed:
+            WS_CONNECTIONS.labels("global").dec()
+            WS_DISCONNECTS_TOTAL.labels("global").inc()
 
     async def send_global_message(self, user_id: str, message: dict):
         sent = False

@@ -9,6 +9,7 @@ import logging
 
 from app.core.websocket import manager, get_current_user_ws, MAX_WS_PER_USER
 from app.core.rate_limit import COMMENT_EVENTS, MESSAGE_BURST, MESSAGE_SUSTAINED, REACTION_EVENTS, WS_EVENTS, hit
+from app.core.telemetry import CALLS_STARTED, CALL_SIGNALS, COMMENTS, MESSAGES_SENT, REACTIONS, WS_EVENTS_TOTAL
 from app.core.dependency import get_db, get_current_user
 from app.core.database import UserORM as User, MessageCommentORM, ChatBackgroundPreferenceORM
 from app.core.redis import redis_client
@@ -122,6 +123,9 @@ async def _handle_global_webrtc_signal(*, data: dict, user: User, db: Session) -
     if signal_type not in {"offer", "answer", "candidate", *TERMINAL_CALL_SIGNALS}:
         logger.warning("[CallFlow] rejected unknown signal sender_id=%s", user.id)
         return
+    CALL_SIGNALS.labels(signal_type if signal_type in {"offer", "answer", "candidate"} else "hangup").inc()
+    if signal_type == "offer":
+        CALLS_STARTED.inc()
     if not isinstance(target_user_id, str) or not target_user_id or target_user_id == str(user.id):
         logger.warning("[CallFlow] rejected invalid target sender_id=%s", user.id)
         return
@@ -495,6 +499,7 @@ async def global_websocket_endpoint(
         while True:
             data = await websocket.receive_json()
             hit(WS_EVENTS, user.id)
+            WS_EVENTS_TOTAL.labels("global").inc()
             if data.get("type") == "ping":
                 request_id = data.get("request_id")
                 logger.debug("[WSHealth] ping received: scope=global user_id=%s request_id=%s", user.id, request_id)
@@ -567,6 +572,7 @@ async def websocket_endpoint(
         while True:
             data = await websocket.receive_json()
             hit(WS_EVENTS, user.id)
+            WS_EVENTS_TOTAL.labels("chat").inc()
 
             logger.debug(
                 "WebSocket message received: chat_id=%s user_id=%s type=%s signal_type=%s",
@@ -1050,6 +1056,7 @@ async def send_message(
         
         db.commit()
         db.refresh(message)
+        MESSAGES_SENT.inc()
         
         print(f"✅ Message {message.id} COMMITTED to DB")
         
@@ -1403,6 +1410,7 @@ async def create_comment(chat_id: str, message_id: str, payload: CommentCreate, 
     channel_id = validate_chat_id(chat_id); post = _comment_target(channel_id, message_id, current_user, db)
     comment = MessageCommentORM(id=str(__import__('uuid').uuid4()), message_id=message_id, channel_id=channel_id, user_id=current_user.id, content=payload.content.strip(), created_at=int(time.time()))
     db.add(comment); db.commit(); db.refresh(comment)
+    COMMENTS.inc()
     event = {"type":"comment_created", "channel_id":channel_id, "message_id":message_id, "comment":_comment_payload(comment), "comments_count":_comments_count(db,message_id)}
     await manager.broadcast_to_chat(event, channel_id)
     if post.sender_id != current_user.id:
@@ -1452,6 +1460,7 @@ async def set_message_reaction(
             reactions = message_service.get_reaction_summaries([message_id], current_user.id).get(message_id, [])
             return {"type": "message_reaction_updated", "chat_id": chat_id, "message_id": message_id, "reactions": reactions}
         message_service.set_reaction(message_id, current_user.id, emoji)
+        REACTIONS.inc()
         should_notify = message.sender_id != current_user.id
         if should_notify:
             message_service.upsert_reaction_notification(

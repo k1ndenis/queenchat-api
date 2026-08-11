@@ -11,6 +11,7 @@ from app.core.database import PrivateChatInviteORM, UserORM
 from app.core.dependency import get_current_user, get_db
 from app.services.chat_service import ChatService
 from app.core.rate_limit import INVITE_CREATE, hit
+from app.core.telemetry import INVITES_ACCEPTED, INVITES_CREATED
 
 router = APIRouter()
 INVITE_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -43,6 +44,7 @@ def create_invite(current_user: UserORM = Depends(get_current_user), db: Session
     token = secrets.token_urlsafe(32)
     invite = PrivateChatInviteORM(token_hash=_hash(token), creator_user_id=current_user.id, expires_at=now + INVITE_TTL_SECONDS)
     db.add(invite); db.commit(); db.refresh(invite)
+    INVITES_CREATED.labels("chat").inc()
     return {"id": invite.id, "invite_url": f"https://queenchat.ru/invite/{token}", "expires_at": invite.expires_at}
 
 
@@ -71,4 +73,5 @@ def accept_invite(token: str, current_user: UserORM = Depends(get_current_user),
         chat = service.repo.get_chat(chat_response.id)
     invite.accepted_at, invite.accepted_by_user_id = int(time.time()), current_user.id
     db.commit()
+    INVITES_ACCEPTED.labels("chat").inc()
     return {"chat_id": chat.id}

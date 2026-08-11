@@ -14,6 +14,7 @@ from app.core.database import (ChatORM, ChatParticipantORM, MessageORM, PrivateS
     PrivateSpaceSettingsORM, SpaceDateORM, SpaceMemoryORM, SpaceNoteORM, UserORM)
 from app.core.dependency import get_current_user, get_db
 from app.core.rate_limit import INVITE_CREATE, hit
+from app.core.telemetry import INVITES_ACCEPTED, INVITES_CREATED
 from app.services.chat_service import ChatService
 
 router = APIRouter()
@@ -129,6 +130,7 @@ def create_invite(body: InviteCreate, current_user: UserORM = Depends(get_curren
     token = secrets.token_urlsafe(32)
     invite = PrivateSpaceInviteORM(token_hash=_hash(token), creator_user_id=current_user.id, recipient_user_id=recipient.id if body.chat_id else None, chat_id=body.chat_id, expires_at=now + INVITE_TTL_SECONDS)
     db.add(invite); db.commit(); db.refresh(invite)
+    INVITES_CREATED.labels("space").inc()
     return {"id": invite.id, "invite_url": f"https://queenchat.ru/invite/{token}", "expires_at": invite.expires_at, "chat_id": body.chat_id}
 
 @router.get("/{chat_id}/state")
@@ -151,6 +153,7 @@ def accept_pending_space(chat_id: str, current_user: UserORM = Depends(get_curre
     space = _enable(db, chat_id, status="active")
     invite.accepted_at, invite.accepted_by_user_id = int(time.time()), current_user.id
     db.commit()
+    INVITES_ACCEPTED.labels("space").inc()
     return {"chat_id": chat_id, "space": {"status": space.status, "theme": space.theme, "title": space.title}}
 
 @router.get("/invites/active")

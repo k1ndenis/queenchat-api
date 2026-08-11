@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 
 from app.core.redis import redis_client
+from app.core.telemetry import RATE_LIMIT_HITS
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ def hit(limit: Limit, subject: str) -> int:
             redis_client.expire(key, limit.window_seconds)
         remaining = int(redis_client.ttl(key))
         if count > limit.maximum:
+            RATE_LIMIT_HITS.labels(limit.name).inc()
             logger.warning("%s subject_hash=%s", limit.name.upper() + "_RATE_LIMIT", safe_key(subject))
             raise HTTPException(429, detail="Too many requests. Please try again later.", headers={"Retry-After": str(max(1, remaining))})
         return count

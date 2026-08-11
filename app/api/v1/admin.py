@@ -5,6 +5,7 @@ import os
 import time
 import uuid
 import shutil
+import requests
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Literal, Optional
@@ -41,6 +42,32 @@ def _admin_mutation(admin: UserORM = Depends(require_admin)):
 router = APIRouter(dependencies=[Depends(_admin_read)])
 MAX_PAGE_SIZE = 100
 AnalyticsPeriod = Literal["24h", "7d", "30d", "90d", "1y", "all", "custom"]
+
+
+@router.get("/monitoring-summary")
+def monitoring_summary():
+    """A deliberately small admin-only view; detailed telemetry stays in Grafana."""
+    base = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
+    queries = {
+        "rps": "sum(rate(http_requests_total[5m]))",
+        "p95": "histogram_quantile(.95, sum by(le) (rate(http_request_duration_seconds_bucket[5m])))",
+        "errors_5xx_percent": "100 * sum(rate(http_requests_total{status_code=~'5..'}[5m])) / sum(rate(http_requests_total[5m]))",
+        "cpu_percent": "100 * (1 - avg(rate(node_cpu_seconds_total{mode='idle'}[5m])))",
+        "ram_available_percent": "100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes",
+        "disk_used_percent": "100 * (1-node_filesystem_avail_bytes{mountpoint='/'} / node_filesystem_size_bytes{mountpoint='/'})",
+        "active_ws": "sum(queenchat_websocket_connections)",
+        "api_up": "up{job='queenchat-api'}",
+    }
+    values: dict[str, float | None] = {key: None for key in queries}
+    try:
+        for key, query in queries.items():
+            payload = requests.get(f"{base}/api/v1/query", params={"query": query}, timeout=1).json()
+            result = payload.get("data", {}).get("result", [])
+            values[key] = float(result[0]["value"][1]) if result else None
+    except (requests.RequestException, ValueError, KeyError, IndexError):
+        return {"available": False, "grafana_url": os.getenv("GRAFANA_PUBLIC_URL", "")}
+    return {"available": True, "api": "healthy" if values["api_up"] == 1 else "unavailable", **values,
+            "grafana_url": os.getenv("GRAFANA_PUBLIC_URL", "")}
 
 
 class RoleRequest(BaseModel):

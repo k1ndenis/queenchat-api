@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.database import UserORM
 from app.core.dependency import get_current_user
+from app.core.telemetry import ICE_CREDENTIALS
 
 
 router = APIRouter()
@@ -39,6 +40,7 @@ def get_ice_servers(current_user: UserORM = Depends(get_current_user)):
 
     host = os.getenv("TURN_HOST", DEFAULT_TURN_HOST).strip() or DEFAULT_TURN_HOST
     username = f"{int(time.time()) + ttl_seconds}:{current_user.id}"
+    ICE_CREDENTIALS.inc()
 
     return {
         "iceServers": [

@@ -12,6 +12,7 @@ import logging
 import math
 
 from app.core.dependency import get_db, get_current_user
+from app.core.telemetry import UPLOAD_BYTES, UPLOADS
 from app.core.database import UserORM as User
 from app.services.chat_service import ChatService
 from app.core.upload_security import ensure_disk_capacity, enforce_daily_quota, image_extension_and_signature
@@ -166,7 +167,8 @@ async def upload_voice(file: UploadFile = File(...), current_user: User = Depend
             await _run('ffmpeg','-y','-i',str(source),'-vn','-ac','1','-c:a','libopus','-b:a','40k',str(partial), timeout=60)
             logger.warning("[MediaUpload] voice transcode ok")
             partial.replace(final); completed = True
-        return {'url': f'/uploads/voice/{final.name}', 'duration': round(duration, 1), 'file_size': final.stat().st_size, 'mime_type':'audio/ogg', 'waveform': await _waveform(final)}
+        size = final.stat().st_size; UPLOADS.labels("voice").inc(); UPLOAD_BYTES.labels("voice").inc(size)
+        return {'url': f'/uploads/voice/{final.name}', 'duration': round(duration, 1), 'file_size': size, 'mime_type':'audio/ogg', 'waveform': await _waveform(final)}
     except HTTPException as exc:
         logger.warning("[MediaUpload] voice failed status=%s detail=%s", exc.status_code, exc.detail)
         raise
@@ -198,7 +200,8 @@ async def upload_video_note(file: UploadFile = File(...), current_user: User = D
             logger.warning("[MediaUpload] video_note transcode ok")
             await _run('ffmpeg','-y','-ss','0.1','-i',str(partial),'-frames:v','1','-q:v','4',str(thumb_partial), timeout=30)
             partial.replace(final); thumb_partial.replace(thumb); completed = True
-        return {'url':f'/uploads/video_notes/{final.name}','duration':round(duration,1),'width':480,'height':480,'thumbnail_url':f'/uploads/video_notes/{thumb.name}','file_size':final.stat().st_size,'mime_type':'video/mp4'}
+        size = final.stat().st_size; UPLOADS.labels("video_note").inc(); UPLOAD_BYTES.labels("video_note").inc(size)
+        return {'url':f'/uploads/video_notes/{final.name}','duration':round(duration,1),'width':480,'height':480,'thumbnail_url':f'/uploads/video_notes/{thumb.name}','file_size':size,'mime_type':'video/mp4'}
     except HTTPException as exc:
         logger.warning("[MediaUpload] video_note failed status=%s detail=%s", exc.status_code, exc.detail)
         raise
@@ -238,6 +241,7 @@ async def upload_images(
         
         file_url = f"/uploads/images/{new_filename}"
         uploaded_urls.append(file_url)
+        UPLOADS.labels("image").inc(); UPLOAD_BYTES.labels("image").inc(len(content))
     
     return {
         "success": True,
@@ -259,6 +263,7 @@ async def upload_avatar(
     
     with open(file_path, "wb") as f:
         f.write(content)
+    UPLOADS.labels("avatar").inc(); UPLOAD_BYTES.labels("avatar").inc(len(content))
     
     avatar_url = f"/uploads/images/{new_filename}"
     
@@ -287,6 +292,7 @@ async def upload_chat_avatar(
     
     with open(file_path, "wb") as f:
         f.write(content)
+    UPLOADS.labels("chat_avatar").inc(); UPLOAD_BYTES.labels("chat_avatar").inc(len(content))
     
     avatar_url = f"/uploads/images/{new_filename}"
     
@@ -312,4 +318,5 @@ async def upload_chat_background(
     new_filename = f"chat_background_{chat_id}_{uuid.uuid4().hex}{ext}"
     with open(UPLOAD_DIR / new_filename, "wb") as destination:
         destination.write(content)
+    UPLOADS.labels("chat_background").inc(); UPLOAD_BYTES.labels("chat_background").inc(len(content))
     return {"success": True, "url": f"/uploads/images/{new_filename}"}

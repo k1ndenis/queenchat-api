@@ -17,6 +17,7 @@ from app.models.auth import (
     LoginRequest,
     TokenResponse
 )
+from app.core.telemetry import LOGIN_FAILED, LOGIN_SUCCESS, USERS_REGISTERED
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ def register(
     })
     
     _cookie(response, result["token"])
-    
+    USERS_REGISTERED.inc()
     return response
 
 
@@ -93,6 +94,7 @@ def login(
     except HTTPException as exc:
         if exc.status_code == 401:
             hit(LOGIN_ACCOUNT_FAILURE, request.phone)
+            LOGIN_FAILED.inc()
             logger.warning("LOGIN_FAILED")
             # Keep wrong-user and wrong-password responses identical.
             raise HTTPException(401, "Invalid phone or password", headers={"X-QueenChat-Challenge": "turnstile" if challenge_needed else ""})
@@ -105,6 +107,7 @@ def login(
     })
     
     _cookie(response, result["token"])
+    LOGIN_SUCCESS.inc()
     
     return response
 
