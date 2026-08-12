@@ -31,3 +31,8 @@ WS_RATE_LIMIT_TOTAL = Counter("queenchat_websocket_rate_limit_total", "WebSocket
 CALLS_STARTED = Counter("queenchat_calls_started_total", "WebRTC offer signals")
 CALL_SIGNALS = Counter("queenchat_call_signals_total", "WebRTC signals", ["signal_type"])
 ICE_CREDENTIALS = Counter("queenchat_ice_credentials_issued_total", "TURN ICE credentials issued")
+
+ANDROID_UPDATE_CHECKS = Counter("queenchat_android_update_check_total", "Android update checks", ["result"])
+ANDROID_UPDATE_AVAILABLE = Counter("queenchat_android_update_available_total", "Android update availability responses")
+ANDROID_UPDATE_DOWNLOADS = Counter("queenchat_android_update_download_total", "Android update download outcomes", ["result"])
+ANDROID_UPDATE_VERIFY_FAILED = Counter("queenchat_android_update_verify_failed_total", "Android APK verification failures")

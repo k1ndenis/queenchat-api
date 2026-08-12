@@ -1,10 +1,12 @@
 import logging
+import json
+import os
 import re
 import time
 import uuid
 
-from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -20,7 +22,9 @@ from app.api.v1 import chat_invites
 from app.core.database import lifespan
 from app.core import firebase
 from app.core.logging import configure_logging
-from app.core.telemetry import HTTP_DURATION, HTTP_IN_PROGRESS, HTTP_REQUESTS
+from app.core.telemetry import (ANDROID_UPDATE_AVAILABLE, ANDROID_UPDATE_CHECKS,
+    ANDROID_UPDATE_DOWNLOADS, ANDROID_UPDATE_VERIFY_FAILED, HTTP_DURATION,
+    HTTP_IN_PROGRESS, HTTP_REQUESTS)
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 configure_logging()
@@ -96,6 +100,57 @@ app.include_router(webrtc.router, prefix="/api/webrtc", tags=["webrtc"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(spaces.router, prefix="/api/spaces", tags=["spaces"])
 app.include_router(chat_invites.router, prefix="/api/chats/invites", tags=["chat invites"])
+
+ANDROID_RELEASE_CONFIG = Path(os.getenv("ANDROID_RELEASE_CONFIG", "/app/releases/android_release.json"))
+ANDROID_RELEASE_FIELDS = {
+    "platform", "version_code", "version_name", "minimum_version_code", "mandatory",
+    "apk_url", "sha256", "size_bytes", "changelog", "published_at",
+}
+
+def load_android_release() -> dict:
+    try:
+        raw = json.loads(ANDROID_RELEASE_CONFIG.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Android release is not published") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.error("android_release_config_invalid", extra={"event": "android_release_config_invalid"})
+        raise HTTPException(status_code=503, detail="Android release metadata is unavailable") from exc
+    required = {"version_code", "version_name", "minimum_version_code", "mandatory", "apk_url", "sha256", "size_bytes", "changelog"}
+    if not isinstance(raw, dict) or not required.issubset(raw) or raw.get("platform", "android") != "android":
+        raise HTTPException(status_code=503, detail="Android release metadata is unavailable")
+    if not isinstance(raw["version_code"], int) or not isinstance(raw["minimum_version_code"], int) or raw["version_code"] < 1 or raw["minimum_version_code"] < 1:
+        raise HTTPException(status_code=503, detail="Android release metadata is unavailable")
+    if not isinstance(raw["apk_url"], str) or not raw["apk_url"].startswith("https://queenchat.ru/downloads/"):
+        raise HTTPException(status_code=503, detail="Android release metadata is unavailable")
+    if not isinstance(raw["sha256"], str) or not re.fullmatch(r"[a-fA-F0-9]{64}", raw["sha256"]):
+        raise HTTPException(status_code=503, detail="Android release metadata is unavailable")
+    if not isinstance(raw["changelog"], list) or not all(isinstance(item, str) and len(item) <= 240 for item in raw["changelog"]):
+        raise HTTPException(status_code=503, detail="Android release metadata is unavailable")
+    return {field: raw[field] for field in ANDROID_RELEASE_FIELDS if field in raw} | {"platform": "android"}
+
+@app.get("/api/app/android/version", include_in_schema=False)
+def android_version():
+    try:
+        release = load_android_release()
+    except HTTPException as exc:
+        ANDROID_UPDATE_CHECKS.labels("unavailable").inc()
+        raise exc
+    ANDROID_UPDATE_CHECKS.labels("success").inc()
+    ANDROID_UPDATE_AVAILABLE.inc()
+    return JSONResponse(release, headers={"Cache-Control": "no-cache, max-age=0"})
+
+@app.post("/api/app/android/update-events", include_in_schema=False)
+async def android_update_event(request: Request):
+    try:
+        body = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid update event")
+    event = body.get("event") if isinstance(body, dict) else None
+    if event == "download_success": ANDROID_UPDATE_DOWNLOADS.labels("success").inc()
+    elif event == "download_failed": ANDROID_UPDATE_DOWNLOADS.labels("failed").inc()
+    elif event == "verify_failed": ANDROID_UPDATE_VERIFY_FAILED.inc()
+    else: raise HTTPException(status_code=400, detail="Invalid update event")
+    return Response(status_code=204)
 
 @app.get("/health")
 def health_check():
