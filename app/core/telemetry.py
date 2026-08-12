@@ -21,7 +21,9 @@ INVITES_ACCEPTED = Counter("queenchat_invites_accepted_total", "Accepted invites
 RATE_LIMIT_HITS = Counter("queenchat_rate_limit_hits_total", "Rate-limit rejections", ["policy"])
 
 WS_CONNECTIONS = Gauge("queenchat_websocket_connections", "Active WebSocket connections", ["type"])
-WS_CONNECTIONS_TOTAL = Counter("queenchat_websocket_connections_total", "WebSocket connections", ["type"])
+# prometheus_client strips a trailing ``_total`` from Counter names internally.
+# Keep this distinct from the active-connections gauge above.
+WS_CONNECTIONS_TOTAL = Counter("queenchat_websocket_connections_opened_total", "WebSocket connections opened", ["type"])
 WS_DISCONNECTS_TOTAL = Counter("queenchat_websocket_disconnects_total", "WebSocket disconnects", ["type"])
 WS_EVENTS_TOTAL = Counter("queenchat_websocket_events_total", "WebSocket events", ["type"])
 WS_RATE_LIMIT_TOTAL = Counter("queenchat_websocket_rate_limit_total", "WebSocket rate limit rejections", ["type"])
